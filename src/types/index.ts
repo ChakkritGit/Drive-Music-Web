@@ -91,3 +91,20 @@ export interface PlaybackSession {
   loopMode: "off" | "all" | "one";
   volume: number;
 }
+
+/** Broadcast across every tab/device signed into the same Google account (via PartyKit) so
+ * they can mirror "what's playing" — see src/components/SyncContext.tsx. Deliberately carries
+ * the full queue (not just a track id) so a device that's never seen this folder/playlist
+ * before can still "Play here" without needing it already cached or synced locally. */
+export interface SyncState {
+  queue: DriveFile[];
+  currentIndex: number;
+  source: PlaySource | null;
+  progress: number;
+  isPlaying: boolean;
+  shuffle: boolean;
+  loopMode: "off" | "all" | "one";
+  deviceId: string;
+  deviceName: string;
+  updatedAt: number;
+}

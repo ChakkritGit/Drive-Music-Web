@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "drive-music-sync",
+  "main": "party/index.ts",
+  "compatibility_date": "2026-07-28",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SyncServer",
+        "class_name": "SyncServer",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // Required for Durable Objects on the Workers free plan.
+      "new_sqlite_classes": ["SyncServer"],
+    },
+  ],
+}

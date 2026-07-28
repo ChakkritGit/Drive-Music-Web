@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
+import { useSync } from "@/components/SyncContext";
 
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -52,8 +53,13 @@ export function Player() {
     cycleLoopMode,
     expand,
   } = usePlayer();
+  const { remoteNowPlaying, claimPlayback } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
+  // Only surface what's playing on another device when nothing's loaded here — once this
+  // device has its own track, its own state is what matters locally.
+  const remoteTrack = !currentFile ? remoteNowPlaying : null;
+  const remoteFile = remoteTrack?.queue[remoteTrack.currentIndex];
   // The mobile bottom tab nav (see app/(app)/layout.tsx) renders for every route in that group
   // (home/browse/playlists/library) once signed in — /admin is the only route outside it.
   // Everywhere the nav is absent, this bar is the bottommost fixed element, so it alone is
@@ -109,7 +115,31 @@ export function Player() {
           </div>
         </div>
       )}
-      <div className="mx-auto flex max-w-2xl items-center gap-3 px-6 py-3">
+
+      <div
+        className={clsx(
+          "mx-auto flex max-w-2xl items-center gap-2 px-6 text-xs text-zinc-400",
+          // On mobile with the bottom tab nav present, this bar already sits above it (which
+          // clears the gesture area itself) — no need to double up on safe-area padding here.
+          hasBottomNav
+            ? "pt-3"
+            : "pt-[max(0.75rem,env(safe-area-inset-bottom))]",
+        )}
+      >
+        <span className="tabular-nums">{formatTime(progress)}</span>
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.1}
+          value={Math.min(progress, duration || 0)}
+          onChange={(e) => seek(Number(e.target.value))}
+          className="flex-1 accent-zinc-900 dark:accent-zinc-100"
+        />
+        <span className="tabular-nums">{formatTime(duration)}</span>
+      </div>
+
+      <div className="mx-auto flex max-w-2xl items-center gap-3 px-6 py-3 pb-8 md:pb-4">
         <button
           onClick={expand}
           disabled={!currentFile}
@@ -136,11 +166,15 @@ export function Player() {
           <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50">
             {currentFile
               ? currentMeta?.title || currentFile.name
-              : "No track playing"}
+              : remoteFile
+                ? remoteFile.name.replace(/\.[^./]+$/, "")
+                : "No track playing"}
           </p>
           <p className="truncate text-xs text-zinc-400">
             {error ? (
               <span className="text-red-500">{error}</span>
+            ) : remoteTrack ? (
+              `Playing on ${remoteTrack.deviceName}`
             ) : (
               currentMeta?.artist || " "
             )}
@@ -179,31 +213,42 @@ export function Player() {
         </div>
 
         <div className="flex items-center gap-1">
-          <button
-            onClick={prev}
-            disabled={!currentFile}
-            className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
-          >
-            <SkipBack className="h-4 w-4" />
-          </button>
-          <button
-            onClick={togglePlay}
-            disabled={!currentFile || isLoading}
-            className="rounded-full bg-zinc-900 p-2.5 text-white transition hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            {isPlaying ? (
-              <Pause className="h-4 w-4" />
-            ) : (
-              <Play className="h-4 w-4" />
-            )}
-          </button>
-          <button
-            onClick={next}
-            disabled={!currentFile}
-            className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
-          >
-            <SkipForward className="h-4 w-4" />
-          </button>
+          {remoteTrack ? (
+            <button
+              onClick={claimPlayback}
+              className="flex cursor-pointer items-center gap-1.5 rounded-full bg-zinc-900 px-3 py-2 text-xs font-medium text-white transition hover:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              <Play className="h-3.5 w-3.5" /> Play here
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={prev}
+                disabled={!currentFile}
+                className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
+              >
+                <SkipBack className="h-4 w-4" />
+              </button>
+              <button
+                onClick={togglePlay}
+                disabled={!currentFile || isLoading}
+                className="rounded-full bg-zinc-900 p-2.5 text-white transition hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                {isPlaying ? (
+                  <Pause className="h-4 w-4" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+              </button>
+              <button
+                onClick={next}
+                disabled={!currentFile}
+                className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
+              >
+                <SkipForward className="h-4 w-4" />
+              </button>
+            </>
+          )}
         </div>
 
         <div className="hidden items-center gap-2 sm:flex">
@@ -241,29 +286,6 @@ export function Player() {
         >
           <ChevronUp className="h-4 w-4" />
         </button>
-      </div>
-
-      <div
-        className={clsx(
-          "mx-auto flex max-w-2xl items-center gap-2 px-6 text-xs text-zinc-400",
-          // On mobile with the bottom tab nav present, this bar already sits above it (which
-          // clears the gesture area itself) — no need to double up on safe-area padding here.
-          hasBottomNav
-            ? "pb-3"
-            : "pb-[max(0.75rem,env(safe-area-inset-bottom))]",
-        )}
-      >
-        <span className="tabular-nums">{formatTime(progress)}</span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.1}
-          value={Math.min(progress, duration || 0)}
-          onChange={(e) => seek(Number(e.target.value))}
-          className="flex-1 accent-zinc-900 dark:accent-zinc-100"
-        />
-        <span className="tabular-nums">{formatTime(duration)}</span>
       </div>
     </div>
   );

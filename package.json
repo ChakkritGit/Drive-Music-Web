@@ -7,19 +7,25 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "party:dev": "if [ -f .env.cloudflare ]; then set -a; . ./.env.cloudflare; set +a; fi; wrangler dev",
+    "party:deploy": "if [ -f .env.cloudflare ]; then set -a; . ./.env.cloudflare; set +a; fi; wrangler deploy"
   },
   "dependencies": {
     "clsx": "^2.1.1",
     "idb": "^8.0.3",
+    "jose": "^6.2.4",
     "lucide-react": "^1.27.0",
     "music-metadata": "^11.14.0",
     "next": "16.2.12",
     "next-auth": "^4.24.15",
+    "partyserver": "^0.5.8",
+    "partysocket": "^1.3.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260728.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -29,6 +35,7 @@
     "fake-indexeddb": "^6.2.5",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.114.0"
   }
 }
