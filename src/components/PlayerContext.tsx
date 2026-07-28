@@ -70,6 +70,8 @@ interface PlayerContextValue {
   currentSource: PlaySource | null;
   /** A queue index guaranteed to play next (set by `addToQueue`), overriding shuffle/sequential order for one step. */
   playNextIndex: number | null;
+  /** The upcoming tracks after the current one, in actual play order (respects shuffle/playNextIndex). */
+  upNext: { file: DriveFile; index: number }[];
   play: (queue: DriveFile[], index: number, source?: PlaySource) => void;
   addToQueue: (file: DriveFile) => void;
   removeFromQueue: (index: number) => void;
@@ -111,7 +113,10 @@ async function tryPlay(audio: HTMLAudioElement): Promise<void> {
 }
 
 /** Returns the cached track for a file, downloading + parsing + storing it first if needed. */
-async function ensureCached(file: DriveFile, accessToken: string | undefined): Promise<CachedTrack> {
+async function ensureCached(
+  file: DriveFile,
+  accessToken: string | undefined,
+): Promise<CachedTrack> {
   const cached = await getCachedTrack(file.id);
   if (cached) return cached;
 
@@ -136,7 +141,11 @@ async function ensureCached(file: DriveFile, accessToken: string | undefined): P
  * sort earlier — Efraimidis-Spirakis weighted sampling: key = random() ** (1/weight).
  * Equal weights (e.g. an untrained model) degrade to a plain uniform shuffle.
  */
-export function weightedShuffledIndices(length: number, pinned: number, weights: number[]): number[] {
+export function weightedShuffledIndices(
+  length: number,
+  pinned: number,
+  weights: number[],
+): number[] {
   const rest: { index: number; key: number }[] = [];
   for (let i = 0; i < length; i++) {
     if (i === pinned) continue;
@@ -168,13 +177,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(1);
-  const [cachedTracks, setCachedTracks] = useState<Map<string, CachedTrack>>(new Map());
-  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [cachedTracks, setCachedTracks] = useState<Map<string, CachedTrack>>(
+    new Map(),
+  );
+  const [downloadProgress, setDownloadProgress] =
+    useState<DownloadProgress | null>(null);
   const [shuffle, setShuffle] = useState(false);
   const [loopMode, setLoopMode] = useState<LoopMode>("off");
   const [isExpanded, setIsExpanded] = useState(false);
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
-  const [model, setModel] = useState<ListeningModel>(() => createDefaultModel());
+  const [model, setModel] = useState<ListeningModel>(() =>
+    createDefaultModel(),
+  );
   const [shuffleOrder, setShuffleOrder] = useState<number[]>([]);
   const [currentSource, setCurrentSource] = useState<PlaySource | null>(null);
   const [playNextIndex, setPlayNextIndex] = useState<number | null>(null);
@@ -235,7 +249,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const currentFile = currentIndex !== null ? (queue[currentIndex] ?? null) : null;
+  const currentFile =
+    currentIndex !== null ? (queue[currentIndex] ?? null) : null;
 
   // Loads (from cache, or downloads + caches + parses) and plays whenever the current file changes.
   useEffect(() => {
@@ -258,8 +273,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const previousFile = previousFileRef.current;
       if (outgoingAudio && previousFile) {
         const dur = outgoingAudio.duration;
-        const fraction = dur && Number.isFinite(dur) && dur > 0 ? Math.min(1, outgoingAudio.currentTime / dur) : 0;
-        const features = extractFeatures(previousFile, currentMeta ?? undefined, new Date());
+        const fraction =
+          dur && Number.isFinite(dur) && dur > 0
+            ? Math.min(1, outgoingAudio.currentTime / dur)
+            : 0;
+        const features = extractFeatures(
+          previousFile,
+          currentMeta ?? undefined,
+          new Date(),
+        );
         const predicted = predict(model, features);
         setModel((prev) => trainStep(prev, features, fraction));
         void recordModelEvent({
@@ -335,7 +357,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const computeWeightsFor = useCallback(
     (files: DriveFile[]) => {
       const now = new Date();
-      return files.map((f) => predict(model, extractFeatures(f, cachedTracks.get(f.id)?.parsedMeta, now)));
+      return files.map((f) =>
+        predict(
+          model,
+          extractFeatures(f, cachedTracks.get(f.id)?.parsedMeta, now),
+        ),
+      );
     },
     [model, cachedTracks],
   );
@@ -375,7 +402,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // after the first skip.
       setShuffleOrder(
         shuffle && newQueue.length > 0
-          ? weightedShuffledIndices(newQueue.length, index, computeWeightsFor(newQueue))
+          ? weightedShuffledIndices(
+              newQueue.length,
+              index,
+              computeWeightsFor(newQueue),
+            )
           : [],
       );
       setQueue(newQueue);
@@ -383,7 +414,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setCurrentSource(source ?? null);
       setPlayNextIndex(null);
       if (source) {
-        recordRecentSource({ ...source, tracks: newQueue, lastPlayedAt: Date.now() }).then(refreshRecentSources);
+        recordRecentSource({
+          ...source,
+          tracks: newQueue,
+          lastPlayedAt: Date.now(),
+        }).then(refreshRecentSources);
       }
     },
     [shuffle, computeWeightsFor, refreshRecentSources],
@@ -399,7 +434,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Decided against the outer `queue`/`currentIndex` state (not inside the `setQueue`
       // updater below) so this side effect runs exactly once, not potentially twice under
       // React Strict Mode's dev-only double-invocation of updater functions.
-      const alreadyPlayingThis = queue.some((f, i) => f.id === file.id && i === currentIndex);
+      const alreadyPlayingThis = queue.some(
+        (f, i) => f.id === file.id && i === currentIndex,
+      );
       if (alreadyPlayingThis) return;
 
       setQueue((prev) => {
@@ -411,11 +448,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
 
         const existingIndex = prev.findIndex((f) => f.id === file.id);
-        const withoutFile = existingIndex === -1 ? prev : prev.filter((f) => f.id !== file.id);
+        const withoutFile =
+          existingIndex === -1 ? prev : prev.filter((f) => f.id !== file.id);
         // Removing an earlier occurrence shifts every following index (including the current
         // track's) down by one — track where the currently-playing track ends up.
         const adjustedCurrentIndex =
-          existingIndex !== -1 && currentIndex !== null && existingIndex < currentIndex
+          existingIndex !== -1 &&
+          currentIndex !== null &&
+          existingIndex < currentIndex
             ? currentIndex - 1
             : (currentIndex ?? 0);
 
@@ -473,7 +513,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (pinned: number): { order: number[]; position: number } => {
       let order = shuffleOrder;
       if (order.length !== queue.length || !order.includes(pinned)) {
-        order = weightedShuffledIndices(queue.length, pinned, computeWeightsFor(queue));
+        order = weightedShuffledIndices(
+          queue.length,
+          pinned,
+          computeWeightsFor(queue),
+        );
       }
       return { order, position: order.indexOf(pinned) };
     },
@@ -497,7 +541,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       let nextPosition = position + 1;
       if (nextPosition >= order.length) {
         // Exhausted this shuffled pass — deal a fresh bag and keep going (manual skip always advances).
-        order = weightedShuffledIndices(queue.length, idx, computeWeightsFor(queue));
+        order = weightedShuffledIndices(
+          queue.length,
+          idx,
+          computeWeightsFor(queue),
+        );
         nextPosition = 0;
       }
       setShuffleOrder(order);
@@ -521,6 +569,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (loopMode === "one") {
       const audio = audioRef.current;
       if (audio) {
+        // A single-track loop never changes `currentFile.id`, so the load effect (which
+        // normally trains the model on the outgoing track) never re-runs here — train
+        // directly on each full play-through instead, or repeat listens would never teach
+        // the model anything.
+        if (currentFile) {
+          const dur = audio.duration;
+          const fraction =
+            dur && Number.isFinite(dur) && dur > 0
+              ? Math.min(1, audio.currentTime / dur)
+              : 1;
+          const features = extractFeatures(
+            currentFile,
+            currentMeta ?? undefined,
+            new Date(),
+          );
+          const predicted = predict(model, features);
+          setModel((prev) => trainStep(prev, features, fraction));
+          void recordModelEvent({
+            id: crypto.randomUUID(),
+            trackId: currentFile.id,
+            title: currentMeta?.title || currentFile.name,
+            fraction,
+            predicted,
+            at: Date.now(),
+          });
+        }
         audio.currentTime = 0;
         void tryPlay(audio);
       }
@@ -547,7 +621,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
         let nextPosition = position + 1;
         if (atEndOfBag) {
-          order = weightedShuffledIndices(queue.length, idx, computeWeightsFor(queue));
+          order = weightedShuffledIndices(
+            queue.length,
+            idx,
+            computeWeightsFor(queue),
+          );
           nextPosition = 0;
         }
         setShuffleOrder(order);
@@ -562,7 +640,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
 
     next();
-  }, [loopMode, shuffle, currentIndex, queue, next, resolveShuffleOrder, computeWeightsFor, playNextIndex]);
+  }, [
+    loopMode,
+    shuffle,
+    currentIndex,
+    queue,
+    next,
+    resolveShuffleOrder,
+    computeWeightsFor,
+    playNextIndex,
+    currentFile,
+    currentMeta,
+    model,
+  ]);
 
   const seek = useCallback((seconds: number) => {
     if (audioRef.current) audioRef.current.currentTime = seconds;
@@ -609,7 +699,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // reflects the shuffled order immediately, not just after the next skip.
     setShuffleOrder(
       turningOn && currentIndex !== null && queue.length > 0
-        ? weightedShuffledIndices(queue.length, currentIndex, computeWeightsFor(queue))
+        ? weightedShuffledIndices(
+            queue.length,
+            currentIndex,
+            computeWeightsFor(queue),
+          )
         : [],
     );
     setShuffle(turningOn);
@@ -621,6 +715,30 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const expand = useCallback(() => setIsExpanded(true), []);
   const collapse = useCallback(() => setIsExpanded(false), []);
+
+  // A track queued via "play next" always shows first, regardless of shuffle — the rest of
+  // the list follows the actual shuffled order (or plain queue order) after it, skipping that
+  // entry so it doesn't also appear a second time further down.
+  const upNext = useMemo<{ file: DriveFile; index: number }[]>(() => {
+    if (currentIndex === null || queue.length === 0) return [];
+    const result: { file: DriveFile; index: number }[] = [];
+    if (playNextIndex !== null && playNextIndex < queue.length) {
+      result.push({ file: queue[playNextIndex], index: playNextIndex });
+    }
+    const restIndices: number[] =
+      shuffle && shuffleOrder.length === queue.length
+        ? shuffleOrder.slice(shuffleOrder.indexOf(currentIndex) + 1)
+        : Array.from(
+            { length: queue.length - currentIndex - 1 },
+            (_, i) => currentIndex + 1 + i,
+          );
+    for (const index of restIndices) {
+      if (index === playNextIndex) continue;
+      if (result.length >= 20) break;
+      result.push({ file: queue[index], index });
+    }
+    return result;
+  }, [queue, currentIndex, shuffle, shuffleOrder, playNextIndex]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
@@ -643,6 +761,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       shuffleOrder,
       currentSource,
       playNextIndex,
+      upNext,
       play,
       addToQueue,
       removeFromQueue,
@@ -678,6 +797,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       shuffleOrder,
       currentSource,
       playNextIndex,
+      upNext,
       play,
       addToQueue,
       removeFromQueue,
@@ -704,7 +824,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           const t = e.currentTarget.currentTime;
           progressRef.current = t;
           setProgress(t);
-          if (Date.now() - lastSessionSaveRef.current > SESSION_SAVE_THROTTLE_MS) {
+          if (
+            Date.now() - lastSessionSaveRef.current >
+            SESSION_SAVE_THROTTLE_MS
+          ) {
             lastSessionSaveRef.current = Date.now();
             persistSession(t);
           }

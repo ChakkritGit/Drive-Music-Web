@@ -17,7 +17,6 @@ import {
   VolumeX,
 } from "lucide-react";
 import clsx from "clsx";
-import type { DriveFile } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { getAverageColor } from "@/lib/color";
@@ -45,11 +44,10 @@ export function FullPlayer() {
     duration,
     volume,
     shuffle,
-    shuffleOrder,
     loopMode,
     isExpanded,
     currentSource,
-    playNextIndex,
+    upNext,
     togglePlay,
     next,
     prev,
@@ -103,38 +101,22 @@ export function FullPlayer() {
     };
   }, [isExpanded]);
 
-  const currentQueueIndex = currentFile ? queue.findIndex((f) => f.id === currentFile.id) : -1;
-
-  // A track queued via "play next" always shows first, regardless of shuffle — the rest of
-  // the list follows the actual shuffled order (or plain queue order) after it, skipping that
-  // entry so it doesn't also appear a second time further down.
-  const upNext: { file: DriveFile; index: number }[] = [];
-  if (currentQueueIndex >= 0) {
-    if (playNextIndex !== null && playNextIndex < queue.length) {
-      upNext.push({ file: queue[playNextIndex], index: playNextIndex });
-    }
-    const restIndices: number[] =
-      shuffle && shuffleOrder.length === queue.length
-        ? shuffleOrder.slice(shuffleOrder.indexOf(currentQueueIndex) + 1)
-        : Array.from({ length: queue.length - currentQueueIndex - 1 }, (_, i) => currentQueueIndex + 1 + i);
-    for (const index of restIndices) {
-      if (index === playNextIndex) continue;
-      if (upNext.length >= 20) break;
-      upNext.push({ file: queue[index], index });
-    }
-  }
-
   return (
     <div
       aria-hidden={!isExpanded}
       className={clsx(
         "fixed inset-0 z-50 flex flex-col overflow-hidden bg-white transition-all duration-300 ease-out dark:bg-black",
-        isExpanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-6 opacity-0",
+        isExpanded
+          ? "translate-y-0 opacity-100"
+          : "pointer-events-none translate-y-6 opacity-0",
       )}
     >
       <div
         className="pointer-events-none absolute -inset-20 animate-[breathe_6s_ease-in-out_infinite] blur-[100px]"
-        style={{ backgroundColor: glowColor, transition: "background-color 700ms ease-out" }}
+        style={{
+          backgroundColor: glowColor,
+          transition: "background-color 700ms ease-out",
+        }}
       />
 
       <div className="relative flex items-center justify-between px-6 py-4">
@@ -145,7 +127,9 @@ export function FullPlayer() {
         >
           <ChevronDown className="h-5 w-5" />
         </button>
-        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Now Playing</p>
+        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          Now Playing
+        </p>
         <div className="w-9" />
       </div>
 
@@ -156,7 +140,11 @@ export function FullPlayer() {
         >
           {currentMeta?.pictureDataUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={currentMeta.pictureDataUrl} alt="" className="h-full w-full object-cover" />
+            <img
+              src={currentMeta.pictureDataUrl}
+              alt=""
+              className="h-full w-full object-cover"
+            />
           ) : (
             <Music className="h-16 w-16 text-zinc-400" />
           )}
@@ -165,17 +153,23 @@ export function FullPlayer() {
         <div className="flex w-full max-w-sm items-center gap-3">
           <div className="min-w-0 flex-1 text-center">
             <p className="truncate text-lg font-medium text-zinc-900 dark:text-zinc-50">
-              {currentFile ? currentMeta?.title || currentFile.name : "No track playing"}
+              {currentFile
+                ? currentMeta?.title || currentFile.name
+                : "No track playing"}
             </p>
             <p className="mt-1 truncate text-sm text-zinc-400">
               {error ? (
                 <span className="text-red-500">{error}</span>
               ) : (
-                [currentMeta?.artist, currentMeta?.album].filter(Boolean).join(" · ") || " "
+                [currentMeta?.artist, currentMeta?.album]
+                  .filter(Boolean)
+                  .join(" · ") || " "
               )}
             </p>
             {currentSource && (
-              <p className="mt-0.5 truncate text-xs text-zinc-400">Playing from {currentSource.name}</p>
+              <p className="mt-0.5 truncate text-xs text-zinc-400">
+                Playing from {currentSource.name}
+              </p>
             )}
           </div>
           {currentFile && (
@@ -185,9 +179,18 @@ export function FullPlayer() {
                 "shrink-0 rounded-full p-2 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900",
                 isFavorite(currentFile.id) ? "text-red-500" : "text-zinc-400",
               )}
-              aria-label={isFavorite(currentFile.id) ? "Remove from favorites" : "Add to favorites"}
+              aria-label={
+                isFavorite(currentFile.id)
+                  ? "Remove from favorites"
+                  : "Add to favorites"
+              }
             >
-              <Heart className={clsx("h-5 w-5", isFavorite(currentFile.id) && "fill-current")} />
+              <Heart
+                className={clsx(
+                  "h-5 w-5",
+                  isFavorite(currentFile.id) && "fill-current",
+                )}
+              />
             </button>
           )}
         </div>
@@ -213,7 +216,9 @@ export function FullPlayer() {
             onClick={toggleShuffle}
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
-              shuffle ? "text-emerald-500" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
+              shuffle
+                ? "text-emerald-500"
+                : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Toggle shuffle"
           >
@@ -231,7 +236,11 @@ export function FullPlayer() {
             disabled={!currentFile || isLoading}
             className="rounded-full bg-zinc-900 p-4 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            {isPlaying ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6" />}
+            {isPlaying ? (
+              <Pause className="h-6 w-6" />
+            ) : (
+              <Play className="h-6 w-6" />
+            )}
           </button>
           <button
             onClick={next}
@@ -244,11 +253,17 @@ export function FullPlayer() {
             onClick={cycleLoopMode}
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
-              loopMode !== "off" ? "text-emerald-500" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
+              loopMode !== "off"
+                ? "text-emerald-500"
+                : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Cycle repeat mode"
           >
-            {loopMode === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+            {loopMode === "one" ? (
+              <Repeat1 className="h-4 w-4" />
+            ) : (
+              <Repeat className="h-4 w-4" />
+            )}
           </button>
         </div>
 
@@ -273,7 +288,9 @@ export function FullPlayer() {
 
         {upNext.length > 0 && (
           <div className="w-full max-w-sm rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-900/60">
-            <p className="mb-1 text-xs font-semibold tracking-wide text-zinc-400 uppercase">Up Next</p>
+            <p className="mb-1 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
+              Up Next
+            </p>
             <ul className="max-h-64 divide-y divide-zinc-200/70 overflow-y-auto dark:divide-zinc-800/70">
               {upNext.map(({ file, index }) => (
                 <TrackRow

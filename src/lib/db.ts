@@ -77,7 +77,9 @@ function getDb(): Promise<IDBPDatabase<DriveMusicDB>> {
   return dbPromise;
 }
 
-export async function getCachedTrack(fileId: string): Promise<CachedTrack | undefined> {
+export async function getCachedTrack(
+  fileId: string,
+): Promise<CachedTrack | undefined> {
   const db = await getDb();
   return db.get(TRACKS_STORE, fileId);
 }
@@ -134,15 +136,24 @@ export async function renamePlaylist(id: string, name: string): Promise<void> {
   await db.put(PLAYLISTS_STORE, { ...playlist, name });
 }
 
-export async function addTrackToPlaylist(id: string, file: DriveFile): Promise<void> {
+export async function addTrackToPlaylist(
+  id: string,
+  file: DriveFile,
+): Promise<void> {
   const db = await getDb();
   const playlist = await db.get(PLAYLISTS_STORE, id);
   if (!playlist) return;
   if (playlist.tracks.some((t) => t.id === file.id)) return;
-  await db.put(PLAYLISTS_STORE, { ...playlist, tracks: [...playlist.tracks, file] });
+  await db.put(PLAYLISTS_STORE, {
+    ...playlist,
+    tracks: [...playlist.tracks, file],
+  });
 }
 
-export async function removeTrackFromPlaylist(id: string, fileId: string): Promise<void> {
+export async function removeTrackFromPlaylist(
+  id: string,
+  fileId: string,
+): Promise<void> {
   const db = await getDb();
   const playlist = await db.get(PLAYLISTS_STORE, id);
   if (!playlist) return;
@@ -152,9 +163,15 @@ export async function removeTrackFromPlaylist(id: string, fileId: string): Promi
   });
 }
 
-export async function recordRecentSource(source: RecentSource): Promise<void> {
+export async function recordRecentSource(
+  source: Omit<RecentSource, "playCount">,
+): Promise<void> {
   const db = await getDb();
-  await db.put(RECENT_SOURCES_STORE, source);
+  const existing = await db.get(RECENT_SOURCES_STORE, source.id);
+  await db.put(RECENT_SOURCES_STORE, {
+    ...source,
+    playCount: (existing?.playCount ?? 0) + 1,
+  });
 }
 
 export async function listRecentSources(limit = 12): Promise<RecentSource[]> {
@@ -186,7 +203,9 @@ export async function recordModelEvent(event: ModelEvent): Promise<void> {
   const count = await db.count(MODEL_EVENTS_STORE);
   if (count > MAX_MODEL_EVENTS) {
     const all = await db.getAll(MODEL_EVENTS_STORE);
-    const oldest = all.sort((a, b) => a.at - b.at).slice(0, count - MAX_MODEL_EVENTS);
+    const oldest = all
+      .sort((a, b) => a.at - b.at)
+      .slice(0, count - MAX_MODEL_EVENTS);
     await Promise.all(oldest.map((e) => db.delete(MODEL_EVENTS_STORE, e.id)));
   }
 }
@@ -203,7 +222,9 @@ export async function loadPlaybackSession(): Promise<PlaybackSession | null> {
   return existing ?? null;
 }
 
-export async function savePlaybackSession(session: PlaybackSession): Promise<void> {
+export async function savePlaybackSession(
+  session: PlaybackSession,
+): Promise<void> {
   const db = await getDb();
   await db.put(PLAYBACK_SESSION_STORE, session);
 }

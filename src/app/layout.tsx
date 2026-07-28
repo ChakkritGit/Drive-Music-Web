@@ -25,6 +25,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#09090b",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -35,9 +36,14 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-dvh antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      {/* Fixed (not min-) height + overflow-hidden here is load-bearing: it's what makes each
+          route's own <main overflow-y-auto> (app/(app)/layout.tsx, app/admin/page.tsx) the
+          actual scroll container instead of the whole document — without it, content just
+          grows the body and the page scrolls, so scroll-position tracking (e.g. the header
+          hide-on-scroll-down/show-on-scroll-up) never sees any movement. */}
+      <body className="flex h-dvh flex-col overflow-hidden">
         <Providers>{children}</Providers>
       </body>
     </html>

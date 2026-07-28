@@ -53,6 +53,8 @@ export interface PlaySource {
 export interface RecentSource extends PlaySource {
   tracks: DriveFile[];
   lastPlayedAt: number;
+  /** How many times this source has been played (started), across all time. */
+  playCount: number;
 }
 
 /** A small online-trained 2-layer neural net (tanh hidden layer, sigmoid output) over hashed listening-context features (see src/lib/features.ts). */

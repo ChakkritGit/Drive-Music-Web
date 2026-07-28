@@ -25,6 +25,13 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Tailwind's preflight doesn't touch cursor, and browsers default <button> to the plain arrow
+   (not a hand) — set it app-wide instead of sprinkling `cursor-pointer` on every button. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

@@ -159,6 +159,32 @@ describe("recentSources store", () => {
     expect(matches).toHaveLength(1);
     expect(matches[0].name).toBe("Second");
   });
+
+  it("increments playCount each time the same source is recorded again", async () => {
+    await recordRecentSource({
+      type: "folder",
+      id: "counted",
+      name: "Counted Folder",
+      tracks: [],
+      lastPlayedAt: 1,
+    });
+    await recordRecentSource({
+      type: "folder",
+      id: "counted",
+      name: "Counted Folder",
+      tracks: [],
+      lastPlayedAt: 2,
+    });
+    await recordRecentSource({
+      type: "folder",
+      id: "counted",
+      name: "Counted Folder",
+      tracks: [],
+      lastPlayedAt: 3,
+    });
+    const all = await listRecentSources(50);
+    expect(all.find((s) => s.id === "counted")?.playCount).toBe(3);
+  });
 });
 
 describe("model store", () => {
@@ -188,8 +214,22 @@ describe("model store", () => {
 
 describe("modelEvents store", () => {
   it("records an event and lists it back, most recent first", async () => {
-    await recordModelEvent({ id: "e1", trackId: "t1", title: "Song A", fraction: 0.9, predicted: 0.5, at: 1000 });
-    await recordModelEvent({ id: "e2", trackId: "t2", title: "Song B", fraction: 0.2, predicted: 0.4, at: 2000 });
+    await recordModelEvent({
+      id: "e1",
+      trackId: "t1",
+      title: "Song A",
+      fraction: 0.9,
+      predicted: 0.5,
+      at: 1000,
+    });
+    await recordModelEvent({
+      id: "e2",
+      trackId: "t2",
+      title: "Song B",
+      fraction: 0.2,
+      predicted: 0.4,
+      at: 2000,
+    });
     const events = await listModelEvents(10);
     expect(events[0].id).toBe("e2");
     expect(events[1].id).toBe("e1");
