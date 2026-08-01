@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { weightedShuffledIndices } from "@/components/PlayerContext";
+import {
+  growShuffleWindow,
+  seedShuffleWindow,
+  SHUFFLE_WINDOW,
+  weightedShuffledIndices,
+} from "@/components/PlayerContext";
 
 function isPermutationOf(order: number[], length: number): boolean {
   if (order.length !== length) return false;
@@ -70,5 +75,82 @@ describe("weightedShuffledIndices", () => {
     // weights shorter than length — missing entries should not throw.
     const order = weightedShuffledIndices(4, 0, [0.5]);
     expect(isPermutationOf(order, 4)).toBe(true);
+  });
+});
+
+function hasNoDuplicates(order: number[]): boolean {
+  return new Set(order).size === order.length;
+}
+
+describe("seedShuffleWindow", () => {
+  it("pins the given index first and never duplicates an entry", () => {
+    const length = 50;
+    const weights = Array.from({ length }, () => Math.random());
+    for (let trial = 0; trial < 20; trial++) {
+      const order = seedShuffleWindow(length, 7, weights);
+      expect(order[0]).toBe(7);
+      expect(hasNoDuplicates(order)).toBe(true);
+      order.forEach((i) => expect(i).toBeGreaterThanOrEqual(0));
+      order.forEach((i) => expect(i).toBeLessThan(length));
+    }
+  });
+
+  it("caps the window at SHUFFLE_WINDOW for a large queue", () => {
+    const length = 500;
+    const weights = Array.from({ length }, () => 1);
+    const order = seedShuffleWindow(length, 0, weights);
+    expect(order.length).toBe(SHUFFLE_WINDOW);
+  });
+
+  it("shrinks to the whole queue when it's smaller than the window", () => {
+    const length = 5;
+    const weights = Array.from({ length }, () => 1);
+    const order = seedShuffleWindow(length, 2, weights);
+    expect(isPermutationOf(order, length)).toBe(true);
+    expect(order[0]).toBe(2);
+  });
+
+  it("handles a single-track queue", () => {
+    const order = seedShuffleWindow(1, 0, [1]);
+    expect(order).toEqual([0]);
+  });
+});
+
+describe("growShuffleWindow", () => {
+  it("appends exactly one new index not already in the window", () => {
+    const length = 50;
+    const weights = Array.from({ length }, () => Math.random());
+    const order = seedShuffleWindow(length, 0, weights);
+    const grown = growShuffleWindow(order, length, weights, false, order[order.length - 1]);
+    expect(grown.length).toBe(order.length + 1);
+    expect(grown.slice(0, order.length)).toEqual(order);
+    expect(order.includes(grown[grown.length - 1])).toBe(false);
+  });
+
+  it("with loop off, leaves the order untouched once every track is already queued", () => {
+    const length = 5;
+    const weights = Array.from({ length }, () => 1);
+    // A window already covering the whole queue — nothing left to add.
+    const order = seedShuffleWindow(length, 0, weights);
+    expect(order.length).toBe(length);
+    const grown = growShuffleWindow(order, length, weights, true, order[0]);
+    expect(grown).toEqual(order);
+  });
+
+  it("with loop on, starts allowing repeats once every track is already queued", () => {
+    const length = 5;
+    const weights = Array.from({ length }, () => 1);
+    const order = seedShuffleWindow(length, 0, weights);
+    expect(order.length).toBe(length);
+    const grown = growShuffleWindow(order, length, weights, false, order[0]);
+    expect(grown.length).toBe(order.length + 1);
+    // Only the index we're advancing from is excluded — everything else (already-queued
+    // tracks included) is fair game once the pool is exhausted.
+    expect(grown[grown.length - 1]).not.toBe(order[0]);
+  });
+
+  it("does nothing for a single-track queue with nothing else to add", () => {
+    const grown = growShuffleWindow([0], 1, [1], false, 0);
+    expect(grown).toEqual([0]);
   });
 });

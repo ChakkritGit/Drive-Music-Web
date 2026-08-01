@@ -23,7 +23,7 @@ import type {
 import { downloadFile } from "@/lib/drive";
 import { parseTrackMetadata } from "@/lib/metadata";
 import { extractFeatures } from "@/lib/features";
-import { createDefaultModel, predict, trainStep } from "@/lib/model";
+import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
 import {
   deleteCachedTrack,
   getCachedTrack,
@@ -165,6 +165,58 @@ export function weightedShuffledIndices(
   }
   rest.sort((a, b) => b.key - a.key);
   return [pinned, ...rest.map((r) => r.index)];
+}
+
+// Live playback shuffle keeps only a rolling window of upcoming tracks queued (see
+// seedShuffleWindow/growShuffleWindow below) instead of shuffling an entire library/playlist
+// up front — for a large library that also means computing weights for a handful of
+// candidates at a time rather than the whole thing on every advance.
+export const SHUFFLE_WINDOW = 20;
+
+function pickWeightedFrom(candidates: number[], weights: number[]): number {
+  const candidateWeights = candidates.map((i) => Math.max(weights[i] ?? 0.5, 0.001));
+  return candidates[weightedRandomIndex(candidateWeights)];
+}
+
+/** Builds the initial shuffle window: [pinned, up to SHUFFLE_WINDOW - 1 more weighted-random
+ * picks], instead of a full permutation of the whole queue. */
+export function seedShuffleWindow(queueLength: number, pinned: number, weights: number[]): number[] {
+  const order = [pinned];
+  const used = new Set([pinned]);
+  const windowSize = Math.min(queueLength, SHUFFLE_WINDOW);
+  while (order.length < windowSize) {
+    const candidates: number[] = [];
+    for (let i = 0; i < queueLength; i++) if (!used.has(i)) candidates.push(i);
+    const pick = pickWeightedFrom(candidates, weights);
+    order.push(pick);
+    used.add(pick);
+  }
+  return order;
+}
+
+/** Appends exactly one more weighted-random pick to `order`, excluding whatever's already in
+ * it — called whenever advancing leaves fewer than SHUFFLE_WINDOW tracks queued ahead, so "Up
+ * Next" stays topped up instead of the whole library being shuffled once up front. Once every
+ * track has appeared in `order`, loop "off" leaves it as-is (nothing left to add — Up Next
+ * tapers to empty as the real end of the queue is reached, same as the non-shuffle case);
+ * loop "all" starts allowing repeats, only excluding the track being advanced from. */
+export function growShuffleWindow(
+  order: number[],
+  queueLength: number,
+  weights: number[],
+  loopOff: boolean,
+  advancingFrom: number,
+): number[] {
+  const used = new Set(order);
+  let candidates: number[] = [];
+  for (let i = 0; i < queueLength; i++) if (!used.has(i)) candidates.push(i);
+  if (candidates.length === 0) {
+    if (loopOff) return order;
+    candidates = [];
+    for (let i = 0; i < queueLength; i++) if (i !== advancingFrom) candidates.push(i);
+    if (candidates.length === 0) return order; // only one track total — nothing to add
+  }
+  return [...order, pickWeightedFrom(candidates, weights)];
 }
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
@@ -523,16 +575,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const play = useCallback(
     (newQueue: DriveFile[], index: number, source?: PlaySource) => {
       cancelCrossfade();
-      // Shuffle stays on across a new queue — eagerly deal a fresh model-weighted bag right
-      // away (pinned at the starting track) so "Up Next" is correct immediately, not just
-      // after the first skip.
+      // Shuffle stays on across a new queue — eagerly seed a fresh windowed shuffle order
+      // right away (pinned at the starting track) so "Up Next" is correct immediately, not
+      // just after the first skip.
       setShuffleOrder(
         shuffle && newQueue.length > 0
-          ? weightedShuffledIndices(
-              newQueue.length,
-              index,
-              computeWeightsFor(newQueue),
-            )
+          ? seedShuffleWindow(newQueue.length, index, computeWeightsFor(newQueue))
           : [],
       );
       setQueue(newQueue);
@@ -666,21 +714,46 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [currentFile, togglePlay]);
 
-  // Returns [order, positionOfPinned], regenerating the order only when it's stale
-  // (queue size changed, or `pinned` isn't in it) — a cheap no-op otherwise.
+  // Returns [order, positionOfPinned], reseeding the window only when it's stale (`pinned`
+  // isn't in it — a fresh queue, or shuffle was just turned on) — a cheap no-op otherwise.
+  // `order` is deliberately not the whole queue shuffled — see seedShuffleWindow.
   const resolveShuffleOrder = useCallback(
     (pinned: number): { order: number[]; position: number } => {
       let order = shuffleOrder;
-      if (order.length !== queue.length || !order.includes(pinned)) {
-        order = weightedShuffledIndices(
-          queue.length,
-          pinned,
-          computeWeightsFor(queue),
-        );
+      if (!order.includes(pinned)) {
+        order = seedShuffleWindow(queue.length, pinned, computeWeightsFor(queue));
       }
       return { order, position: order.indexOf(pinned) };
     },
     [shuffleOrder, queue, computeWeightsFor],
+  );
+
+  // What plays after `fromIndex` in shuffle mode, growing the window by one (weighted-random,
+  // no repeats until every track's been queued once) so "Up Next" stays topped up around
+  // SHUFFLE_WINDOW tracks instead of the whole library being shuffled once up front. Returns
+  // null only when there's genuinely nothing left (loop off, every track already played).
+  // Shared by next() and handleEnded() so manual skip and natural end-of-track agree.
+  const advanceShuffle = useCallback(
+    (fromIndex: number): number | null => {
+      const resolved = resolveShuffleOrder(fromIndex);
+      let order = resolved.order;
+      const nextPosition = resolved.position + 1;
+      const weights = computeWeightsFor(queue);
+      if (nextPosition >= order.length) {
+        order = growShuffleWindow(order, queue.length, weights, loopMode === "off", fromIndex);
+        if (nextPosition >= order.length) {
+          setShuffleOrder(order);
+          return null;
+        }
+      }
+      const remainingAhead = order.length - (nextPosition + 1);
+      if (remainingAhead < SHUFFLE_WINDOW - 1) {
+        order = growShuffleWindow(order, queue.length, weights, loopMode === "off", order[nextPosition]);
+      }
+      setShuffleOrder(order);
+      return order[nextPosition];
+    },
+    [resolveShuffleOrder, computeWeightsFor, queue, loopMode],
   );
 
   const next = useCallback(() => {
@@ -694,24 +767,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return target;
       }
       if (!shuffle) return (idx + 1) % queue.length;
-
-      const resolved = resolveShuffleOrder(idx);
-      let order = resolved.order;
-      const position = resolved.position;
-      let nextPosition = position + 1;
-      if (nextPosition >= order.length) {
-        // Exhausted this shuffled pass — deal a fresh bag and keep going (manual skip always advances).
-        order = weightedShuffledIndices(
-          queue.length,
-          idx,
-          computeWeightsFor(queue),
-        );
-        nextPosition = 0;
-      }
-      setShuffleOrder(order);
-      return order[nextPosition];
+      const advanced = advanceShuffle(idx);
+      return advanced === null ? idx : advanced; // nothing left (loop off) — stay put
     });
-  }, [queue, shuffle, resolveShuffleOrder, computeWeightsFor, playNextIndex, cancelCrossfade]);
+  }, [queue, shuffle, advanceShuffle, playNextIndex, cancelCrossfade]);
 
   const prev = useCallback(() => {
     cancelCrossfade();
@@ -777,25 +836,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (shuffle) {
       setCurrentIndex((idx) => {
         if (idx === null || queue.length === 0) return idx;
-        const resolved = resolveShuffleOrder(idx);
-        let order = resolved.order;
-        const position = resolved.position;
-        const atEndOfBag = position + 1 >= order.length;
-        if (atEndOfBag && loopMode === "off") {
-          setShuffleOrder(order);
-          return idx; // Every track in this shuffled pass has played — stop instead of reshuffling.
-        }
-        let nextPosition = position + 1;
-        if (atEndOfBag) {
-          order = weightedShuffledIndices(
-            queue.length,
-            idx,
-            computeWeightsFor(queue),
-          );
-          nextPosition = 0;
-        }
-        setShuffleOrder(order);
-        return order[nextPosition];
+        const advanced = advanceShuffle(idx);
+        return advanced === null ? idx : advanced; // nothing left (loop off) — stop instead of reshuffling
       });
       return;
     }
@@ -812,8 +854,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     currentIndex,
     queue,
     next,
-    resolveShuffleOrder,
-    computeWeightsFor,
+    advanceShuffle,
     playNextIndex,
     currentFile,
     currentMeta,
@@ -960,15 +1001,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const toggleShuffle = useCallback(() => {
     cancelCrossfade();
     const turningOn = !shuffle;
-    // Eagerly deal the bag right away (pinned at whatever's currently playing) so "Up Next"
-    // reflects the shuffled order immediately, not just after the next skip.
+    // Eagerly seed the window right away (pinned at whatever's currently playing) so "Up
+    // Next" reflects the shuffled order immediately, not just after the next skip.
     setShuffleOrder(
       turningOn && currentIndex !== null && queue.length > 0
-        ? weightedShuffledIndices(
-            queue.length,
-            currentIndex,
-            computeWeightsFor(queue),
-          )
+        ? seedShuffleWindow(queue.length, currentIndex, computeWeightsFor(queue))
         : [],
     );
     setShuffle(turningOn);
@@ -991,7 +1028,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       result.push({ file: queue[playNextIndex], index: playNextIndex });
     }
     const restIndices: number[] =
-      shuffle && shuffleOrder.length === queue.length
+      shuffle && shuffleOrder.includes(currentIndex)
         ? shuffleOrder.slice(shuffleOrder.indexOf(currentIndex) + 1)
         : Array.from(
             { length: queue.length - currentIndex - 1 },
