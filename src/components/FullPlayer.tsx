@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   Heart,
@@ -22,6 +22,7 @@ import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
+import { featherImageEdges } from "@/lib/featherImage";
 import { TrackRow } from "@/components/TrackRow";
 
 const FALLBACK_GLOW = "rgb(120, 120, 120)";
@@ -59,12 +60,16 @@ export function FullPlayer() {
     cycleLoopMode,
     collapse,
     removeFromQueue,
+    visualizerEnabled,
+    getAudioLevel,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
   const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
+  const [featheredArt, setFeatheredArt] = useState<string | null>(null);
   const [lastVolume, setLastVolume] = useState(1);
+  const glowRef = useRef<HTMLDivElement | null>(null);
 
   function toggleMute() {
     if (volume > 0) {
@@ -92,6 +97,54 @@ export function FullPlayer() {
     };
   }, [currentMeta?.pictureDataUrl]);
 
+  // Bakes real transparency into the artwork's edges (see featherImageEdges) so they fade into
+  // the blurred glow behind the page — while this is processing (a track just changed), the
+  // sharp original shows briefly rather than nothing.
+  useEffect(() => {
+    let cancelled = false;
+    // Cleared up front (not just for the "no artwork" case) so a still-processing new track
+    // shows its own sharp original instead of the *previous* track's feathered image.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reset on track change, see comment above
+    setFeatheredArt(null);
+    if (!currentMeta?.pictureDataUrl) return;
+    featherImageEdges(currentMeta.pictureDataUrl).then((url) => {
+      if (!cancelled) setFeatheredArt(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentMeta?.pictureDataUrl]);
+
+  // Drives the ambient glow from the actual audio (via the shared analyser — see
+  // getAudioLevel in PlayerContext) instead of the fixed-timer `breathe` CSS animation, while
+  // this view is open and the setting's on. Sets style directly on the ref rather than through
+  // React state, the same reasoning as everywhere else something needs to update every
+  // animation frame: state at that rate would mean a render every frame for no benefit.
+  useEffect(() => {
+    const el = glowRef.current;
+    if (!el || !isExpanded || !visualizerEnabled) return;
+    // Hand control over from the CSS keyframe animation to this loop's own inline style, and
+    // back again on cleanup — an inline style always wins over a class-based animation for the
+    // same property, so leaving one set would otherwise freeze the CSS animation permanently.
+    el.style.animation = "none";
+    let smoothedLevel = 0;
+    let rafId: number;
+    const tick = () => {
+      const level = getAudioLevel();
+      smoothedLevel += (level - smoothedLevel) * 0.15;
+      el.style.transform = `scale(${1 + smoothedLevel * 0.18})`;
+      el.style.opacity = String(0.35 + smoothedLevel * 0.4);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(rafId);
+      el.style.animation = "";
+      el.style.transform = "";
+      el.style.opacity = "";
+    };
+  }, [isExpanded, visualizerEnabled, getAudioLevel]);
+
   // Lock the page behind this overlay from scrolling while it's open — otherwise the main
   // page's own scroll region is still active underneath this one, producing two competing
   // scrollbars/scroll gestures at once.
@@ -115,7 +168,8 @@ export function FullPlayer() {
       )}
     >
       <div
-        className="pointer-events-none absolute -inset-20 animate-[breathe_11s_ease-in-out_infinite] blur-[100px]"
+        ref={glowRef}
+        className="pointer-events-none absolute -inset-20 animate-[breathe_30s_ease-in-out_infinite] blur-[100px]"
         style={{
           backgroundColor: glowColor,
           transition: "background-color 700ms ease-out",
@@ -155,22 +209,18 @@ export function FullPlayer() {
       <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
         <div
           key={currentFile?.id ?? "none"}
-          className="flex h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 sm:h-80 sm:w-80 dark:bg-zinc-800"
-          style={{
-            // An inset vignette in the same color as the blurred glow behind the page (see
-            // `glowColor` above) fades the artwork's edges toward it — a hard drop shadow
-            // would just redraw a crisp rectangular silhouette around it, so there isn't one
-            // here; CSS mask-image would be the "correct" tool but didn't render reliably.
-            boxShadow: `inset 0 0 56px 14px ${glowColor}`,
-            // Without this, the shadow color snaps instantly whenever glowColor updates —
-            // right on the sharp edge of the artwork, where a hard cut reads as a flash.
-            transition: "box-shadow 700ms ease-out",
-          }}
+          className={clsx(
+            "flex h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] items-center justify-center overflow-hidden rounded-2xl sm:h-80 sm:w-80",
+            // No fill behind the artwork itself — its own edges are genuinely transparent
+            // (see featherImageEdges), so the blurred glow behind the page shows through
+            // them directly. Only the icon fallback (no artwork at all) needs a backdrop.
+            !currentMeta?.pictureDataUrl && "bg-zinc-100 dark:bg-zinc-800",
+          )}
         >
           {currentMeta?.pictureDataUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={currentMeta.pictureDataUrl}
+              src={featheredArt ?? currentMeta.pictureDataUrl}
               alt=""
               className="h-full w-full object-cover"
             />

@@ -46,6 +46,12 @@ const CROSSFADE_SECONDS_KEY = "drive-music-crossfade-seconds";
 export const MAX_CROSSFADE_SECONDS = 12;
 const DEFAULT_CROSSFADE_SECONDS = 5;
 const VOLUME_NORMALIZATION_ENABLED_KEY = "drive-music-volume-normalization-enabled";
+const EQ_ENABLED_KEY = "drive-music-eq-enabled";
+const EQ_BASS_KEY = "drive-music-eq-bass";
+const EQ_MID_KEY = "drive-music-eq-mid";
+const EQ_TREBLE_KEY = "drive-music-eq-treble";
+export const MAX_EQ_GAIN_DB = 12;
+const VISUALIZER_ENABLED_KEY = "drive-music-visualizer-enabled";
 
 export type LoopMode = "off" | "all" | "one";
 type AudioSlot = "A" | "B";
@@ -91,6 +97,23 @@ interface PlayerContextValue {
    * src/lib/loudness.ts. */
   volumeNormalizationEnabled: boolean;
   setVolumeNormalizationEnabled: (value: boolean) => void;
+  /** 3-band equalizer (bass/mid/treble), each in dB within [-MAX_EQ_GAIN_DB, MAX_EQ_GAIN_DB].
+   * When `eqEnabled` is false every band is forced flat (0dB) regardless of the stored values. */
+  eqEnabled: boolean;
+  eqBass: number;
+  eqMid: number;
+  eqTreble: number;
+  setEqEnabled: (value: boolean) => void;
+  setEqBass: (value: number) => void;
+  setEqMid: (value: number) => void;
+  setEqTreble: (value: number) => void;
+  /** Whether FullPlayer's ambient glow reacts to the actual audio (via getAudioLevel) instead
+   * of animating on a fixed timer. */
+  visualizerEnabled: boolean;
+  setVisualizerEnabled: (value: boolean) => void;
+  /** A live 0..1 "how loud right now" reading from the shared analyser — not React state (see
+   * its own definition for why), safe to call every animation frame. */
+  getAudioLevel: () => number;
   play: (queue: DriveFile[], index: number, source?: PlaySource) => void;
   addToQueue: (file: DriveFile) => void;
   removeFromQueue: (index: number) => void;
@@ -117,6 +140,10 @@ export function usePlayer(): PlayerContextValue {
   const ctx = useContext(PlayerContext);
   if (!ctx) throw new Error("usePlayer must be used within a PlayerProvider");
   return ctx;
+}
+
+function clampEqGain(db: number): number {
+  return Math.min(MAX_EQ_GAIN_DB, Math.max(-MAX_EQ_GAIN_DB, db));
 }
 
 /**
@@ -257,13 +284,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  // Routes both audio elements through a shared Web Audio graph so their volume can be
-  // *boosted* above 1.0 for volume normalization (HTMLMediaElement.volume caps at 1.0, so it
-  // can only ever turn loud tracks down — see src/lib/loudness.ts). Each element gets its own
-  // GainNode so the crossfade ramp can still control them independently.
+  // Routes both audio elements through a shared Web Audio graph:
+  //   sourceA → gainA ⎫
+  //                    ⎬→ eqBass → eqMid → eqTreble → compressor → analyser → destination
+  //   sourceB → gainB ⎭
+  // Each element gets its own GainNode (needed so the crossfade ramp can control them
+  // independently — see startCrossfade/advanceCrossfadeRamp); everything downstream of that
+  // merge point is shared, since EQ/limiting/analysis apply to "whatever's audible right now"
+  // regardless of which element that currently is. GainNode is also what lets volume
+  // normalization *boost* a quiet track above 1.0 — HTMLMediaElement.volume alone caps at 1.0,
+  // so it can only ever turn loud tracks down (see src/lib/loudness.ts).
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainARef = useRef<GainNode | null>(null);
   const gainBRef = useRef<GainNode | null>(null);
+  const eqBassRef = useRef<BiquadFilterNode | null>(null);
+  const eqMidRef = useRef<BiquadFilterNode | null>(null);
+  const eqTrebleRef = useRef<BiquadFilterNode | null>(null);
+  // A gentle, always-on limiter — not user-facing (no toggle/settings) — so boosting a quiet
+  // track for volume normalization can't drive a peak into clipping.
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const analyserDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const audioGraphInitializedRef = useRef(false);
 
   // Idempotent and side-effect-free to call again — `createMediaElementSource` can only ever
@@ -285,12 +326,47 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     audioContextRef.current = ctx;
 
     const gainA = ctx.createGain();
-    ctx.createMediaElementSource(audioA).connect(gainA).connect(ctx.destination);
+    ctx.createMediaElementSource(audioA).connect(gainA);
     gainARef.current = gainA;
 
     const gainB = ctx.createGain();
-    ctx.createMediaElementSource(audioB).connect(gainB).connect(ctx.destination);
+    ctx.createMediaElementSource(audioB).connect(gainB);
     gainBRef.current = gainB;
+
+    const eqBass = ctx.createBiquadFilter();
+    eqBass.type = "lowshelf";
+    eqBass.frequency.value = 320;
+    eqBassRef.current = eqBass;
+
+    const eqMid = ctx.createBiquadFilter();
+    eqMid.type = "peaking";
+    eqMid.frequency.value = 1000;
+    eqMid.Q.value = 1;
+    eqMidRef.current = eqMid;
+
+    const eqTreble = ctx.createBiquadFilter();
+    eqTreble.type = "highshelf";
+    eqTreble.frequency.value = 3200;
+    eqTrebleRef.current = eqTreble;
+
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -24;
+    compressor.knee.value = 30;
+    compressor.ratio.value = 4;
+    compressor.attack.value = 0.01;
+    compressor.release.value = 0.25;
+    compressorRef.current = compressor;
+
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.8;
+    analyserDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+    analyserRef.current = analyser;
+
+    gainA.connect(eqBass);
+    gainB.connect(eqBass);
+    eqBass.connect(eqMid).connect(eqTreble).connect(compressor).connect(analyser);
+    analyser.connect(ctx.destination);
   }, []);
 
   useEffect(() => {
@@ -302,6 +378,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (audio === audioARef.current) return gainARef.current;
     if (audio === audioBRef.current) return gainBRef.current;
     return null;
+  }, []);
+
+  // A 0..1 "how loud is the music right now" reading from the shared analyser, weighted
+  // toward bass/mid frequencies (where rhythm mostly lives) so it reads as a beat-following
+  // pulse rather than flickering on every hi-hat — used by FullPlayer's ambient visualizer.
+  // Not React state: this needs to be read every animation frame, far too often to re-render
+  // on, so it's a plain function reading live analyser data on demand instead.
+  const getAudioLevel = useCallback((): number => {
+    const analyser = analyserRef.current;
+    const data = analyserDataRef.current;
+    if (!analyser || !data) return 0;
+    analyser.getByteFrequencyData(data);
+    const usableBins = Math.max(1, Math.round(data.length * 0.6));
+    let sum = 0;
+    for (let i = 0; i < usableBins; i++) sum += data[i];
+    return sum / usableBins / 255;
   }, []);
 
   const objectUrlRef = useRef<string | null>(null);
@@ -362,6 +454,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     DEFAULT_CROSSFADE_SECONDS,
   );
   const [volumeNormalizationEnabled, setVolumeNormalizationEnabledState] = useState(true);
+  const [eqEnabled, setEqEnabledState] = useState(false);
+  const [eqBass, setEqBassState] = useState(0);
+  const [eqMid, setEqMidState] = useState(0);
+  const [eqTreble, setEqTrebleState] = useState(0);
+  const [visualizerEnabled, setVisualizerEnabledState] = useState(true);
 
   useEffect(() => {
     const storedEnabled = localStorage.getItem(CROSSFADE_ENABLED_KEY);
@@ -375,6 +472,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (storedNormalization !== null) {
       setVolumeNormalizationEnabledState(storedNormalization === "true");
     }
+    const storedEqEnabled = localStorage.getItem(EQ_ENABLED_KEY);
+    if (storedEqEnabled !== null) setEqEnabledState(storedEqEnabled === "true");
+    const storedBass = Number(localStorage.getItem(EQ_BASS_KEY));
+    if (Number.isFinite(storedBass)) setEqBassState(clampEqGain(storedBass));
+    const storedMid = Number(localStorage.getItem(EQ_MID_KEY));
+    if (Number.isFinite(storedMid)) setEqMidState(clampEqGain(storedMid));
+    const storedTreble = Number(localStorage.getItem(EQ_TREBLE_KEY));
+    if (Number.isFinite(storedTreble)) setEqTrebleState(clampEqGain(storedTreble));
+    const storedVisualizer = localStorage.getItem(VISUALIZER_ENABLED_KEY);
+    if (storedVisualizer !== null) setVisualizerEnabledState(storedVisualizer === "true");
   }, []);
 
   const setCrossfadeEnabled = useCallback((value: boolean) => {
@@ -392,6 +499,45 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setVolumeNormalizationEnabledState(value);
     localStorage.setItem(VOLUME_NORMALIZATION_ENABLED_KEY, String(value));
   }, []);
+
+  const setEqEnabled = useCallback((value: boolean) => {
+    setEqEnabledState(value);
+    localStorage.setItem(EQ_ENABLED_KEY, String(value));
+  }, []);
+
+  const setEqBass = useCallback((value: number) => {
+    const clamped = clampEqGain(value);
+    setEqBassState(clamped);
+    localStorage.setItem(EQ_BASS_KEY, String(clamped));
+  }, []);
+
+  const setEqMid = useCallback((value: number) => {
+    const clamped = clampEqGain(value);
+    setEqMidState(clamped);
+    localStorage.setItem(EQ_MID_KEY, String(clamped));
+  }, []);
+
+  const setEqTreble = useCallback((value: number) => {
+    const clamped = clampEqGain(value);
+    setEqTrebleState(clamped);
+    localStorage.setItem(EQ_TREBLE_KEY, String(clamped));
+  }, []);
+
+  const setVisualizerEnabled = useCallback((value: boolean) => {
+    setVisualizerEnabledState(value);
+    localStorage.setItem(VISUALIZER_ENABLED_KEY, String(value));
+  }, []);
+
+  // Applies the EQ settings to the actual filter nodes — when off, every band is forced to 0dB
+  // (flat) regardless of the stored slider values, rather than disconnecting the nodes.
+  useEffect(() => {
+    const bass = eqBassRef.current;
+    const mid = eqMidRef.current;
+    const treble = eqTrebleRef.current;
+    if (bass) bass.gain.value = eqEnabled ? eqBass : 0;
+    if (mid) mid.gain.value = eqEnabled ? eqMid : 0;
+    if (treble) treble.gain.value = eqEnabled ? eqTreble : 0;
+  }, [eqEnabled, eqBass, eqMid, eqTreble]);
 
   // Aborts an in-progress crossfade — restores the active element to full volume (abandoning
   // the fade-out) and resets the inactive one, so a manual skip/seek/pause mid-fade cuts
@@ -1355,6 +1501,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setCrossfadeSeconds,
       volumeNormalizationEnabled,
       setVolumeNormalizationEnabled,
+      eqEnabled,
+      eqBass,
+      eqMid,
+      eqTreble,
+      setEqEnabled,
+      setEqBass,
+      setEqMid,
+      setEqTreble,
+      visualizerEnabled,
+      setVisualizerEnabled,
+      getAudioLevel,
       play,
       addToQueue,
       removeFromQueue,
@@ -1399,6 +1556,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setCrossfadeSeconds,
       volumeNormalizationEnabled,
       setVolumeNormalizationEnabled,
+      eqEnabled,
+      eqBass,
+      eqMid,
+      eqTreble,
+      setEqEnabled,
+      setEqBass,
+      setEqMid,
+      setEqTreble,
+      visualizerEnabled,
+      setVisualizerEnabled,
+      getAudioLevel,
       play,
       addToQueue,
       removeFromQueue,

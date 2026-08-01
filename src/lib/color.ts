@@ -1,6 +1,6 @@
 const FALLBACK_COLOR = "rgb(120, 120, 120)";
 
-function loadImage(src: string): Promise<HTMLImageElement> {
+export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
