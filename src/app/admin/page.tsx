@@ -669,15 +669,15 @@ function AdminDashboard() {
             <ArrowLeft className="h-4 w-4" /> Back
           </Link>
           <h1 className="truncate text-center text-base font-medium text-zinc-900 sm:text-lg dark:text-zinc-50">
-            Admin Dashboard
+            Analytics
           </h1>
           <button
             onClick={() => downloadModel(model)}
             className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-sm whitespace-nowrap text-white transition hover:opacity-90 disabled:cursor-default disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
           >
             <Download className="h-4 w-4" />{" "}
-            <span className="hidden sm:inline">Download model</span>
-            <span className="sm:hidden">Download</span>
+            <span className="hidden sm:inline">Export model</span>
+            <span className="sm:hidden">Export</span>
           </button>
         </div>
 

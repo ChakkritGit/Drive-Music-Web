@@ -54,7 +54,7 @@ export function Player() {
     cycleLoopMode,
     expand,
   } = usePlayer();
-  const { remoteNowPlaying, toggleSynced } = useSync();
+  const { remoteNowPlaying, synced, toggleSynced } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
   // Only surface what's playing on another device while this one isn't actively playing —
@@ -179,6 +179,8 @@ export function Player() {
               <span className="text-red-500">{error}</span>
             ) : remoteTrack ? (
               `Playing on ${remoteTrack.deviceName}`
+            ) : synced && remoteNowPlaying ? (
+              `Synced with ${remoteNowPlaying.deviceName}`
             ) : (
               currentMeta?.artist || " "
             )}

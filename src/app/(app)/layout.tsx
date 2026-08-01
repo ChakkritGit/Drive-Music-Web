@@ -11,6 +11,7 @@ import {
   Library as LibraryIcon,
   ListMusic,
   LogOut,
+  Settings,
 } from "lucide-react";
 import clsx from "clsx";
 import { SignInScreen } from "@/components/SignInScreen";
@@ -130,9 +131,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             {session.user?.name}
           </span>
           <Link
+            href="/settings"
+            className="rounded-full border border-zinc-200 p-1.5 text-zinc-500 transition hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900"
+            aria-label="Settings"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </Link>
+          <Link
             href="/admin"
             className="rounded-full border border-zinc-200 p-1.5 text-zinc-500 transition hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900"
-            aria-label="Admin dashboard"
+            aria-label="Analytics"
           >
             <Gauge className="h-3.5 w-3.5" />
           </Link>

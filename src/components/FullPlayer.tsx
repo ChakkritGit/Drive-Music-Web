@@ -61,7 +61,7 @@ export function FullPlayer() {
     removeFromQueue,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
-  const { synced, toggleSynced, syncAvailable } = useSync();
+  const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
   const [lastVolume, setLastVolume] = useState(1);
@@ -188,6 +188,11 @@ export function FullPlayer() {
             {currentSource && (
               <p className="mt-0.5 truncate text-xs text-zinc-400">
                 Playing from {currentSource.name}
+              </p>
+            )}
+            {synced && remoteNowPlaying && (
+              <p className="mt-0.5 flex items-center justify-center gap-1 truncate text-xs text-emerald-500">
+                <Users className="h-3 w-3" /> Synced with {remoteNowPlaying.deviceName}
               </p>
             )}
           </div>
