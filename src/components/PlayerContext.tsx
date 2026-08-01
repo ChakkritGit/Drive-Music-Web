@@ -26,6 +26,11 @@ import { extractFeatures } from "@/lib/features";
 import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
 import { analyzeLoudnessGain } from "@/lib/loudness";
 import {
+  clampSpatialIntensity,
+  createSpatialImpulseResponse,
+  spatialGainsForIntensity,
+} from "@/lib/spatialAudio";
+import {
   deleteCachedTrack,
   getCachedTrack,
   listCachedTracks,
@@ -52,6 +57,9 @@ const EQ_MID_KEY = "drive-music-eq-mid";
 const EQ_TREBLE_KEY = "drive-music-eq-treble";
 export const MAX_EQ_GAIN_DB = 12;
 const VISUALIZER_ENABLED_KEY = "drive-music-visualizer-enabled";
+const SPATIAL_AUDIO_ENABLED_KEY = "drive-music-spatial-audio-enabled";
+const SPATIAL_AUDIO_INTENSITY_KEY = "drive-music-spatial-audio-intensity";
+const DEFAULT_SPATIAL_AUDIO_INTENSITY = 50;
 
 export type LoopMode = "off" | "all" | "one";
 type AudioSlot = "A" | "B";
@@ -111,6 +119,13 @@ interface PlayerContextValue {
    * of animating on a fixed timer. */
   visualizerEnabled: boolean;
   setVisualizerEnabled: (value: boolean) => void;
+  /** A convolver-based stereo-widening effect (the closest a finished stereo mix can get to
+   * Apple/Spotify-style "spatial audio" — see src/lib/spatialAudio.ts for why a true 3D
+   * PannerNode graph doesn't apply here). `spatialAudioIntensity` is a 0-100 percentage. */
+  spatialAudioEnabled: boolean;
+  spatialAudioIntensity: number;
+  setSpatialAudioEnabled: (value: boolean) => void;
+  setSpatialAudioIntensity: (value: number) => void;
   /** A live 0..1 "how loud right now" reading from the shared analyser — not React state (see
    * its own definition for why), safe to call every animation frame. */
   getAudioLevel: () => number;
@@ -285,9 +300,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Routes both audio elements through a shared Web Audio graph:
-  //   sourceA → gainA ⎫
-  //                    ⎬→ eqBass → eqMid → eqTreble → compressor → analyser → destination
-  //   sourceB → gainB ⎭
+  //   sourceA → gainA ⎫                              ⎧→ spatialDryGain ⎫
+  //                    ⎬→ eqBass → eqMid → eqTreble → ⎨                 ⎬→ compressor → analyser → destination
+  //   sourceB → gainB ⎭                              ⎩→ spatialConvolver → spatialWetGain ⎭
   // Each element gets its own GainNode (needed so the crossfade ramp can control them
   // independently — see startCrossfade/advanceCrossfadeRamp); everything downstream of that
   // merge point is shared, since EQ/limiting/analysis apply to "whatever's audible right now"
@@ -300,6 +315,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const eqBassRef = useRef<BiquadFilterNode | null>(null);
   const eqMidRef = useRef<BiquadFilterNode | null>(null);
   const eqTrebleRef = useRef<BiquadFilterNode | null>(null);
+  // Convolver-based stereo widener (spatial audio) — see spatialGainsForIntensity for how
+  // enabled/intensity drive these two gains.
+  const spatialConvolverRef = useRef<ConvolverNode | null>(null);
+  const spatialDryGainRef = useRef<GainNode | null>(null);
+  const spatialWetGainRef = useRef<GainNode | null>(null);
   // A gentle, always-on limiter — not user-facing (no toggle/settings) — so boosting a quiet
   // track for volume normalization can't drive a peak into clipping.
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
@@ -349,6 +369,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     eqTreble.frequency.value = 3200;
     eqTrebleRef.current = eqTreble;
 
+    const spatialConvolver = ctx.createConvolver();
+    spatialConvolver.buffer = createSpatialImpulseResponse(ctx);
+    spatialConvolverRef.current = spatialConvolver;
+
+    const spatialDryGain = ctx.createGain();
+    spatialDryGain.gain.value = 1;
+    spatialDryGainRef.current = spatialDryGain;
+
+    const spatialWetGain = ctx.createGain();
+    spatialWetGain.gain.value = 0;
+    spatialWetGainRef.current = spatialWetGain;
+
     const compressor = ctx.createDynamicsCompressor();
     compressor.threshold.value = -24;
     compressor.knee.value = 30;
@@ -365,7 +397,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
     gainA.connect(eqBass);
     gainB.connect(eqBass);
-    eqBass.connect(eqMid).connect(eqTreble).connect(compressor).connect(analyser);
+    eqBass.connect(eqMid).connect(eqTreble);
+    eqTreble.connect(spatialDryGain);
+    eqTreble.connect(spatialConvolver);
+    spatialConvolver.connect(spatialWetGain);
+    spatialDryGain.connect(compressor);
+    spatialWetGain.connect(compressor);
+    compressor.connect(analyser);
     analyser.connect(ctx.destination);
   }, []);
 
@@ -459,6 +497,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [eqMid, setEqMidState] = useState(0);
   const [eqTreble, setEqTrebleState] = useState(0);
   const [visualizerEnabled, setVisualizerEnabledState] = useState(true);
+  const [spatialAudioEnabled, setSpatialAudioEnabledState] = useState(false);
+  const [spatialAudioIntensity, setSpatialAudioIntensityState] = useState(
+    DEFAULT_SPATIAL_AUDIO_INTENSITY,
+  );
 
   useEffect(() => {
     const storedEnabled = localStorage.getItem(CROSSFADE_ENABLED_KEY);
@@ -482,6 +524,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (Number.isFinite(storedTreble)) setEqTrebleState(clampEqGain(storedTreble));
     const storedVisualizer = localStorage.getItem(VISUALIZER_ENABLED_KEY);
     if (storedVisualizer !== null) setVisualizerEnabledState(storedVisualizer === "true");
+    const storedSpatialEnabled = localStorage.getItem(SPATIAL_AUDIO_ENABLED_KEY);
+    if (storedSpatialEnabled !== null) {
+      setSpatialAudioEnabledState(storedSpatialEnabled === "true");
+    }
+    const storedSpatialIntensity = Number(localStorage.getItem(SPATIAL_AUDIO_INTENSITY_KEY));
+    if (Number.isFinite(storedSpatialIntensity)) {
+      setSpatialAudioIntensityState(clampSpatialIntensity(storedSpatialIntensity));
+    }
   }, []);
 
   const setCrossfadeEnabled = useCallback((value: boolean) => {
@@ -528,6 +578,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(VISUALIZER_ENABLED_KEY, String(value));
   }, []);
 
+  const setSpatialAudioEnabled = useCallback((value: boolean) => {
+    setSpatialAudioEnabledState(value);
+    localStorage.setItem(SPATIAL_AUDIO_ENABLED_KEY, String(value));
+  }, []);
+
+  const setSpatialAudioIntensity = useCallback((value: number) => {
+    const clamped = clampSpatialIntensity(value);
+    setSpatialAudioIntensityState(clamped);
+    localStorage.setItem(SPATIAL_AUDIO_INTENSITY_KEY, String(clamped));
+  }, []);
+
   // Applies the EQ settings to the actual filter nodes — when off, every band is forced to 0dB
   // (flat) regardless of the stored slider values, rather than disconnecting the nodes.
   useEffect(() => {
@@ -538,6 +599,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (mid) mid.gain.value = eqEnabled ? eqMid : 0;
     if (treble) treble.gain.value = eqEnabled ? eqTreble : 0;
   }, [eqEnabled, eqBass, eqMid, eqTreble]);
+
+  // Applies the spatial-audio wet/dry blend — when off, wet is 0 and dry is 1, so the signal
+  // passes through unchanged.
+  useEffect(() => {
+    const dry = spatialDryGainRef.current;
+    const wet = spatialWetGainRef.current;
+    if (!dry || !wet) return;
+    const gains = spatialGainsForIntensity(spatialAudioEnabled, spatialAudioIntensity);
+    dry.gain.value = gains.dry;
+    wet.gain.value = gains.wet;
+  }, [spatialAudioEnabled, spatialAudioIntensity]);
 
   // Aborts an in-progress crossfade — restores the active element to full volume (abandoning
   // the fade-out) and resets the inactive one, so a manual skip/seek/pause mid-fade cuts
@@ -1511,6 +1583,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setEqTreble,
       visualizerEnabled,
       setVisualizerEnabled,
+      spatialAudioEnabled,
+      spatialAudioIntensity,
+      setSpatialAudioEnabled,
+      setSpatialAudioIntensity,
       getAudioLevel,
       play,
       addToQueue,
@@ -1566,6 +1642,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setEqTreble,
       visualizerEnabled,
       setVisualizerEnabled,
+      spatialAudioEnabled,
+      spatialAudioIntensity,
+      setSpatialAudioEnabled,
+      setSpatialAudioIntensity,
       getAudioLevel,
       play,
       addToQueue,

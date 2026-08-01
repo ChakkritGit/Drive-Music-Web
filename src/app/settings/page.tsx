@@ -7,6 +7,7 @@ import { AlertTriangle, ArrowLeft, Trash2 } from "lucide-react";
 import { SignInScreen } from "@/components/SignInScreen";
 import { usePlayer, MAX_CROSSFADE_SECONDS, MAX_EQ_GAIN_DB } from "@/components/PlayerContext";
 import { clearAllData } from "@/lib/db";
+import { MAX_SPATIAL_INTENSITY } from "@/lib/spatialAudio";
 
 export default function SettingsPage() {
   const { data: session, status } = useSession();
@@ -44,6 +45,10 @@ function SettingsView() {
     setEqTreble,
     visualizerEnabled,
     setVisualizerEnabled,
+    spatialAudioEnabled,
+    spatialAudioIntensity,
+    setSpatialAudioEnabled,
+    setSpatialAudioIntensity,
   } = usePlayer();
   const [showConfirmClear, setShowConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -205,6 +210,54 @@ function SettingsView() {
               value={eqTreble}
               onChange={setEqTreble}
               disabled={!eqEnabled}
+            />
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                Spatial audio
+              </h2>
+              <p className="mt-1 text-xs text-zinc-400">
+                Adds a sense of width and space to stereo tracks. Not true 3D positioning — a
+                finished stereo mix has nothing to place in space — but blends in a
+                convolution-based widening effect.
+              </p>
+            </div>
+            <button
+              role="switch"
+              aria-checked={spatialAudioEnabled}
+              onClick={() => setSpatialAudioEnabled(!spatialAudioEnabled)}
+              className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
+                spatialAudioEnabled
+                  ? "bg-emerald-500 ring-emerald-500"
+                  : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  spatialAudioEnabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className={spatialAudioEnabled ? "mt-5" : "mt-5 opacity-40"}>
+            <div className="mb-2 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+              <span>Intensity</span>
+              <span className="tabular-nums">{spatialAudioIntensity.toFixed(0)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={MAX_SPATIAL_INTENSITY}
+              step={1}
+              value={spatialAudioIntensity}
+              disabled={!spatialAudioEnabled}
+              onChange={(e) => setSpatialAudioIntensity(Number(e.target.value))}
+              className="w-full accent-zinc-900 disabled:cursor-not-allowed dark:accent-zinc-100"
             />
           </div>
         </section>
