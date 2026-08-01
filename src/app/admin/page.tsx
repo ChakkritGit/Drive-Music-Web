@@ -157,11 +157,26 @@ interface Particle {
   duration: number;
 }
 
+interface LayoutNode {
+  x: number;
+  y: number;
+  /** Idle-motion phase offset (radians) — deterministic per index, not random, so it stays
+   * stable across resizes instead of nodes jumping to a new phase. */
+  phase: number;
+}
+
 interface Layout {
-  input: { x: number; y: number }[];
-  hidden: { x: number; y: number }[];
+  input: LayoutNode[];
+  hidden: LayoutNode[];
   output: { x: number; y: number };
 }
+
+// Idle-motion tuning: small enough to read as "alive", not distracting; neighboring nodes
+// (even/odd index) are given opposite phase so they drift apart instead of moving in lockstep.
+const IDLE_MOTION_AMPLITUDE = 3;
+const IDLE_MOTION_ENABLED_KEY = "drive-music-admin-idle-motion-enabled";
+const IDLE_MOTION_SPEED_KEY = "drive-music-admin-idle-motion-speed";
+const DEFAULT_IDLE_MOTION_SPEED = 0.9;
 
 function computeLayout(width: number, height: number): Layout {
   const marginX = width * 0.08;
@@ -171,10 +186,12 @@ function computeLayout(width: number, height: number): Layout {
     input: Array.from({ length: FEATURE_SIZE }, (_, i) => ({
       x: marginX,
       y: stepIn * (i + 1),
+      phase: (i % 2) * Math.PI + i * 0.35,
     })),
     hidden: Array.from({ length: HIDDEN_SIZE }, (_, h) => ({
       x: width / 2,
       y: stepHid * (h + 1),
+      phase: (h % 2) * Math.PI,
     })),
     output: { x: width - marginX, y: height / 2 },
   };
@@ -217,6 +234,43 @@ function NetworkVisualizer({
   const prevTrainingEventsRef = useRef<number | null>(null);
   const prevTsRef = useRef<number | null>(null);
   const prefersDarkRef = useRef(true);
+  const animStartRef = useRef<number | null>(null);
+  // Latest animation clock (seconds since this component mounted) — kept in a ref so
+  // handlePointerMove can compute the exact same bobbing positions the draw loop just used,
+  // without needing to re-run on every animation frame itself.
+  const animTimeRef = useRef(0);
+
+  const [idleMotionEnabled, setIdleMotionEnabledState] = useState(true);
+  const [idleMotionSpeed, setIdleMotionSpeedState] = useState(DEFAULT_IDLE_MOTION_SPEED);
+  const idleMotionEnabledRef = useRef(idleMotionEnabled);
+  const idleMotionSpeedRef = useRef(idleMotionSpeed);
+
+  useEffect(() => {
+    const storedEnabled = localStorage.getItem(IDLE_MOTION_ENABLED_KEY);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed from localStorage on mount
+    if (storedEnabled !== null) setIdleMotionEnabledState(storedEnabled === "true");
+    const storedSpeed = Number(localStorage.getItem(IDLE_MOTION_SPEED_KEY));
+    if (Number.isFinite(storedSpeed) && storedSpeed > 0) setIdleMotionSpeedState(storedSpeed);
+  }, []);
+
+  useEffect(() => {
+    idleMotionEnabledRef.current = idleMotionEnabled;
+  }, [idleMotionEnabled]);
+
+  useEffect(() => {
+    idleMotionSpeedRef.current = idleMotionSpeed;
+  }, [idleMotionSpeed]);
+
+  const toggleIdleMotion = () => {
+    const next = !idleMotionEnabled;
+    setIdleMotionEnabledState(next);
+    localStorage.setItem(IDLE_MOTION_ENABLED_KEY, String(next));
+  };
+
+  const changeIdleMotionSpeed = (value: number) => {
+    setIdleMotionSpeedState(value);
+    localStorage.setItem(IDLE_MOTION_SPEED_KEY, String(value));
+  };
 
   useEffect(() => {
     modelRef.current = model;
@@ -307,7 +361,17 @@ function NetworkVisualizer({
         return p.t < 1;
       });
 
-      const { input, hidden, output } = layoutRef.current;
+      if (animStartRef.current === null) animStartRef.current = ts;
+      const t = (ts - animStartRef.current) / 1000;
+      animTimeRef.current = t;
+      const bobY = (node: LayoutNode) =>
+        idleMotionEnabledRef.current
+          ? node.y + Math.sin(t * idleMotionSpeedRef.current + node.phase) * IDLE_MOTION_AMPLITUDE
+          : node.y;
+
+      const { input: inputLayout, hidden: hiddenLayout, output } = layoutRef.current;
+      const input = inputLayout.map((n) => ({ x: n.x, y: bobY(n) }));
+      const hidden = hiddenLayout.map((n) => ({ x: n.x, y: bobY(n) }));
       const w = canvas.width / (window.devicePixelRatio || 1);
       const h = canvas.height / (window.devicePixelRatio || 1);
       ctx.clearRect(0, 0, w, h);
@@ -449,7 +513,16 @@ function NetworkVisualizer({
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const { input, hidden, output } = layoutRef.current;
+    // Same bobbing math as the draw loop, using its latest clock reading — otherwise hover
+    // hit-testing would target the nodes' static positions while they visually drift.
+    const t = animTimeRef.current;
+    const bobY = (node: LayoutNode) =>
+      idleMotionEnabledRef.current
+        ? node.y + Math.sin(t * idleMotionSpeedRef.current + node.phase) * IDLE_MOTION_AMPLITUDE
+        : node.y;
+    const { input: inputLayout, hidden: hiddenLayout, output } = layoutRef.current;
+    const input = inputLayout.map((n) => ({ x: n.x, y: bobY(n) }));
+    const hidden = hiddenLayout.map((n) => ({ x: n.x, y: bobY(n) }));
     const m = modelRef.current;
 
     type HoverTarget = { kind: "input" | "hidden" | "output"; index: number; dist: number; x: number; y: number };
@@ -527,6 +600,40 @@ function NetworkVisualizer({
 
   return (
     <div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <div className="flex items-center gap-2">
+          <button
+            role="switch"
+            aria-checked={idleMotionEnabled}
+            onClick={toggleIdleMotion}
+            className={`relative h-5 w-9 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
+              idleMotionEnabled
+                ? "bg-emerald-500 ring-emerald-500"
+                : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                idleMotionEnabled ? "translate-x-3.5" : "translate-x-0"
+              }`}
+            />
+          </button>
+          <span>Idle motion</span>
+        </div>
+        <div className={`flex flex-1 items-center gap-2 ${idleMotionEnabled ? "" : "opacity-40"}`}>
+          <span className="shrink-0">Speed</span>
+          <input
+            type="range"
+            min={0.2}
+            max={2}
+            step={0.1}
+            value={idleMotionSpeed}
+            disabled={!idleMotionEnabled}
+            onChange={(e) => changeIdleMotionSpeed(Number(e.target.value))}
+            className="max-w-32 flex-1 accent-emerald-500 disabled:cursor-not-allowed"
+          />
+        </div>
+      </div>
       <div
         ref={containerRef}
         className="relative w-full overflow-hidden rounded-xl bg-zinc-100 dark:bg-zinc-950"
