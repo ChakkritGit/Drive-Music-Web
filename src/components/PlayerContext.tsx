@@ -86,8 +86,9 @@ interface PlayerContextValue {
   crossfadeSeconds: number;
   setCrossfadeEnabled: (value: boolean) => void;
   setCrossfadeSeconds: (value: number) => void;
-  /** Whether playback volume is attenuated per-track to even out loudness — see
-   * src/lib/loudness.ts. Only ever turns loud tracks down; never boosts quiet ones. */
+  /** Whether playback volume is adjusted per-track (via a Web Audio GainNode, so quiet tracks
+   * can be boosted, not just loud ones attenuated) to even out loudness — see
+   * src/lib/loudness.ts. */
   volumeNormalizationEnabled: boolean;
   setVolumeNormalizationEnabled: (value: boolean) => void;
   play: (queue: DriveFile[], index: number, source?: PlaySource) => void;
@@ -124,9 +125,15 @@ export function usePlayer(): PlayerContextValue {
  * await for a slow download) too long after the user gesture that triggered it for the
  * browser's "transient activation" window to still be considered active. The track is left
  * loaded and paused; the user can just press play.
+ *
+ * Also resumes `ctx` (the shared Web Audio graph — see ensureAudioGraph) if it's suspended.
+ * Every call site here is gesture-adjacent (a click handler, or a load triggered by one), so
+ * this is where the browser's separate "AudioContext needs a user gesture too" gate gets
+ * satisfied, same spirit as the NotAllowedError handling below.
  */
-async function tryPlay(audio: HTMLAudioElement): Promise<void> {
+async function tryPlay(audio: HTMLAudioElement, ctx: AudioContext | null): Promise<void> {
   try {
+    if (ctx && ctx.state === "suspended") await ctx.resume();
     await audio.play();
   } catch (err) {
     if (err instanceof DOMException && err.name === "NotAllowedError") return;
@@ -250,6 +257,53 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  // Routes both audio elements through a shared Web Audio graph so their volume can be
+  // *boosted* above 1.0 for volume normalization (HTMLMediaElement.volume caps at 1.0, so it
+  // can only ever turn loud tracks down — see src/lib/loudness.ts). Each element gets its own
+  // GainNode so the crossfade ramp can still control them independently.
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainARef = useRef<GainNode | null>(null);
+  const gainBRef = useRef<GainNode | null>(null);
+  const audioGraphInitializedRef = useRef(false);
+
+  // Idempotent and side-effect-free to call again — `createMediaElementSource` can only ever
+  // be called once per <audio> element (a second call throws), which is exactly why this
+  // isn't a useEffect-with-cleanup: React Strict Mode's dev-only double-invocation of effects
+  // would otherwise close the context on the first "cleanup" with no way to rebuild it, since
+  // the elements can never be re-attached to a fresh source node.
+  const ensureAudioGraph = useCallback(() => {
+    if (audioGraphInitializedRef.current) return;
+    const audioA = audioARef.current;
+    const audioB = audioBRef.current;
+    if (!audioA || !audioB) return;
+    audioGraphInitializedRef.current = true;
+
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AudioContextCtor();
+    audioContextRef.current = ctx;
+
+    const gainA = ctx.createGain();
+    ctx.createMediaElementSource(audioA).connect(gainA).connect(ctx.destination);
+    gainARef.current = gainA;
+
+    const gainB = ctx.createGain();
+    ctx.createMediaElementSource(audioB).connect(gainB).connect(ctx.destination);
+    gainBRef.current = gainB;
+  }, []);
+
+  useEffect(() => {
+    ensureAudioGraph();
+  }, [ensureAudioGraph]);
+
+  const getGainNode = useCallback((audio: HTMLAudioElement | null): GainNode | null => {
+    if (!audio) return null;
+    if (audio === audioARef.current) return gainARef.current;
+    if (audio === audioBRef.current) return gainBRef.current;
+    return null;
+  }, []);
+
   const objectUrlRef = useRef<string | null>(null);
   // The blob URL currently loaded into the *inactive* element while it fades in — promoted to
   // objectUrlRef (and the old objectUrlRef revoked) once the crossfade commits.
@@ -263,8 +317,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // tracks can have different normalization gains, so a single shared target wouldn't work.
     outgoingStartVolume: number;
     incomingTargetVolume: number;
-    incoming: HTMLAudioElement;
-    outgoing: HTMLAudioElement;
+    incomingGain: GainNode;
+    outgoingGain: GainNode;
   } | null>(null);
   // Set right before setCurrentIndex() at the end of a crossfade, so the load effect can tell
   // "this transition was already faded in on the other element" apart from a normal load.
@@ -347,14 +401,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!state) return;
     crossfadeStateRef.current = null;
     const active = getActiveAudio();
-    if (active) {
+    const activeGain = getGainNode(active);
+    if (activeGain) {
       // Inlined (rather than calling the `trackGain`/`currentFile` declared further down) so
       // this can stay defined here, ahead of the many other callbacks that depend on it.
       const activeFile = currentIndex !== null ? queue[currentIndex] : undefined;
       const gain = volumeNormalizationEnabled
         ? (activeFile ? (cachedTracks.get(activeFile.id)?.loudnessGain ?? 1) : 1)
         : 1;
-      active.volume = volume * gain;
+      activeGain.gain.value = volume * gain;
     }
     const inactive = getInactiveAudio();
     if (inactive) {
@@ -366,7 +421,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       URL.revokeObjectURL(fadeObjectUrlRef.current);
       fadeObjectUrlRef.current = null;
     }
-  }, [getActiveAudio, getInactiveAudio, volume, currentIndex, queue, cachedTracks, volumeNormalizationEnabled]);
+  }, [
+    getActiveAudio,
+    getInactiveAudio,
+    getGainNode,
+    volume,
+    currentIndex,
+    queue,
+    cachedTracks,
+    volumeNormalizationEnabled,
+  ]);
 
   const refreshCachedTracks = useCallback(async () => {
     const tracks = await listCachedTracks();
@@ -450,15 +514,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           await updateTrackLoudnessGain(track.fileId, gain);
           await refreshCachedTracks();
           if (currentFile?.id === track.fileId) {
-            const audio = getActiveAudio();
-            if (audio) audio.volume = volume * (volumeNormalizationEnabled ? gain : 1);
+            const gainNode = getGainNode(getActiveAudio());
+            if (gainNode) gainNode.gain.value = volume * (volumeNormalizationEnabled ? gain : 1);
           }
         })
         .catch((err) => {
           console.error(`Loudness analysis failed for ${track.fileId}`, err);
         });
     },
-    [refreshCachedTracks, currentFile, volume, volumeNormalizationEnabled, getActiveAudio],
+    [refreshCachedTracks, currentFile, volume, volumeNormalizationEnabled, getActiveAudio, getGainNode],
   );
 
   // Loads (from cache, or downloads + caches + parses) and plays whenever the current file changes.
@@ -522,7 +586,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         fadeObjectUrlRef.current = null;
 
         const promoted = getActiveAudio();
-        if (promoted?.paused) void tryPlay(promoted);
+        if (promoted?.paused) void tryPlay(promoted, audioContextRef.current);
         if (promoted) {
           // The promoted element's `loadedmetadata` fired back while it was still the
           // inactive fade-in element, so handleLoadedMetadata's active-only guard dropped it
@@ -564,7 +628,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const audio = getActiveAudio();
         if (audio) {
           audio.src = url;
-          audio.volume = volume * (volumeNormalizationEnabled ? (track.loudnessGain ?? 1) : 1);
+          const gainNode = getGainNode(audio);
+          if (gainNode) {
+            gainNode.gain.value = volume * (volumeNormalizationEnabled ? (track.loudnessGain ?? 1) : 1);
+          }
           if (restore) {
             // Restoring the last session — resume position, but don't auto-play (browsers
             // block unprompted audio anyway, and it'd be surprising on a plain page load).
@@ -573,7 +640,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
             setProgress(restore.progress);
           } else {
             audio.currentTime = 0;
-            await tryPlay(audio);
+            await tryPlay(audio, audioContextRef.current);
           }
         }
       } catch (err) {
@@ -752,7 +819,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const audio = getActiveAudio();
     if (!audio) return;
     if (audio.paused) {
-      void tryPlay(audio);
+      void tryPlay(audio, audioContextRef.current);
     } else {
       // Pausing mid-crossfade would otherwise leave the inactive element silently playing (or
       // stuck at a partial volume) — simplest correct behavior is to cut the fade short.
@@ -910,7 +977,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           });
         }
         audio.currentTime = 0;
-        void tryPlay(audio);
+        void tryPlay(audio, audioContextRef.current);
       }
       return;
     }
@@ -985,8 +1052,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const state = crossfadeStateRef.current;
     if (!state) return;
     const t = Math.min(1, (performance.now() - state.startTime) / state.durationMs);
-    state.incoming.volume = state.incomingTargetVolume * t;
-    state.outgoing.volume = state.outgoingStartVolume * (1 - t);
+    state.incomingGain.gain.value = state.incomingTargetVolume * t;
+    state.outgoingGain.gain.value = state.outgoingStartVolume * (1 - t);
     if (t >= 1) {
       crossfadeStateRef.current = null;
       crossfadeCommittedForRef.current = state.targetFile.id;
@@ -1003,15 +1070,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const targetFile = queue[targetIndex];
       const cached = cachedTracks.get(targetFile?.id ?? "");
       const incoming = getInactiveAudio();
-      if (!targetFile || !cached || !incoming) return;
+      const incomingGain = getGainNode(incoming);
+      const outgoingGain = getGainNode(outgoing);
+      if (!targetFile || !cached || !incoming || !incomingGain || !outgoingGain) return;
 
       if (fadeObjectUrlRef.current) URL.revokeObjectURL(fadeObjectUrlRef.current);
       const url = URL.createObjectURL(cached.blob);
       fadeObjectUrlRef.current = url;
       incoming.src = url;
       incoming.currentTime = 0;
-      incoming.volume = 0;
-      void tryPlay(incoming);
+      incomingGain.gain.value = 0;
+      void tryPlay(incoming, audioContextRef.current);
 
       // Never let the ramp outlast the outgoing track — `timeupdate` doesn't tick every
       // frame, so by the time this fires the real time left can already be a bit under
@@ -1026,13 +1095,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         durationMs,
         targetIndex,
         targetFile,
-        // `outgoing.volume` at this instant already reflects its own gain (set when it
-        // started playing) — ramping proportionally down from there, not from `volume`
-        // directly, keeps that gain intact through the fade-out.
-        outgoingStartVolume: outgoing.volume,
+        // The outgoing gain node's current value already reflects its own normalization gain
+        // (set when it started playing) — ramping proportionally down from there, not from
+        // `volume` directly, keeps that gain intact through the fade-out.
+        outgoingStartVolume: outgoingGain.gain.value,
         incomingTargetVolume: volume * trackGain(targetFile.id),
-        incoming,
-        outgoing,
+        incomingGain,
+        outgoingGain,
       };
 
       const tick = () => {
@@ -1042,7 +1111,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       };
       requestAnimationFrame(tick);
     },
-    [queue, cachedTracks, getInactiveAudio, volume, crossfadeSeconds, advanceCrossfadeRamp, trackGain],
+    [
+      queue,
+      cachedTracks,
+      getInactiveAudio,
+      getGainNode,
+      volume,
+      crossfadeSeconds,
+      advanceCrossfadeRamp,
+      trackGain,
+    ],
   );
 
   const seek = useCallback(
@@ -1059,10 +1137,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const changeVolume = useCallback(
     (value: number) => {
       setVolumeState(value);
-      const audio = getActiveAudio();
-      if (audio && currentFile) audio.volume = value * trackGain(currentFile.id);
+      const gainNode = getGainNode(getActiveAudio());
+      if (gainNode && currentFile) gainNode.gain.value = value * trackGain(currentFile.id);
     },
-    [getActiveAudio, currentFile, trackGain],
+    [getActiveAudio, getGainNode, currentFile, trackGain],
   );
 
   const removeFromCache = useCallback(

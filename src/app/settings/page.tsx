@@ -131,9 +131,8 @@ function SettingsView() {
                 Volume normalization
               </h2>
               <p className="mt-1 text-xs text-zinc-400">
-                Turn louder tracks down to roughly match quieter ones, so nothing suddenly
-                blasts after a quiet song. Only ever turns loud tracks down — never boosts a
-                quiet one up.
+                Evens out loudness across tracks — quiet ones get boosted, loud ones get turned
+                down — so nothing suddenly blasts or gets lost after switching songs.
               </p>
             </div>
             <button

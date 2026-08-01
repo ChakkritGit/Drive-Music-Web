@@ -11,7 +11,7 @@ import type {
 import { createDefaultModel } from "@/lib/model";
 
 const DB_NAME = "drive-music";
-const DB_VERSION = 7;
+const DB_VERSION = 9;
 const TRACKS_STORE = "tracks";
 const PLAYLISTS_STORE = "playlists";
 const RECENT_SOURCES_STORE = "recentSources";
@@ -52,7 +52,7 @@ let dbPromise: Promise<IDBPDatabase<DriveMusicDB>> | undefined;
 function getDb(): Promise<IDBPDatabase<DriveMusicDB>> {
   if (!dbPromise) {
     dbPromise = openDB<DriveMusicDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      async upgrade(db, oldVersion, _newVersion, transaction) {
         if (!db.objectStoreNames.contains(TRACKS_STORE)) {
           db.createObjectStore(TRACKS_STORE, { keyPath: "fileId" });
         }
@@ -70,6 +70,24 @@ function getDb(): Promise<IDBPDatabase<DriveMusicDB>> {
         }
         if (!db.objectStoreNames.contains(PLAYBACK_SESSION_STORE)) {
           db.createObjectStore(PLAYBACK_SESSION_STORE, { keyPath: "id" });
+        }
+
+        // v8: loudness gain switched from "attenuate only, capped at 1" to "boost or
+        // attenuate, via a Web Audio GainNode". v9: the measurement itself switched from a
+        // single flat average (fooled by quiet intros/silence into over-boosting, which then
+        // made noise floor audible in the loud parts too) to windowed + silence-gated +
+        // percentile (see src/lib/loudness.ts). Either change makes every previously-computed
+        // gain stale, so clear them all to force a re-analysis under the current formula. The
+        // background catch-up scan (see PlayerContext) picks these up automatically; this only
+        // needs to run for a real upgrade, not a brand-new database.
+        if (oldVersion > 0 && oldVersion < 9) {
+          let cursor = await transaction.objectStore(TRACKS_STORE).openCursor();
+          while (cursor) {
+            if (cursor.value.loudnessGain !== undefined) {
+              await cursor.update({ ...cursor.value, loudnessGain: undefined });
+            }
+            cursor = await cursor.continue();
+          }
         }
       },
     });
