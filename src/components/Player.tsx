@@ -14,6 +14,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Users,
   Volume2,
   X,
 } from "lucide-react";
@@ -53,7 +54,7 @@ export function Player() {
     cycleLoopMode,
     expand,
   } = usePlayer();
-  const { remoteNowPlaying, claimPlayback } = useSync();
+  const { remoteNowPlaying, toggleSynced } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
   // Only surface what's playing on another device while this one isn't actively playing —
@@ -218,10 +219,10 @@ export function Player() {
         <div className="flex items-center gap-1">
           {remoteTrack ? (
             <button
-              onClick={claimPlayback}
+              onClick={toggleSynced}
               className="flex cursor-pointer items-center gap-1.5 rounded-full bg-zinc-900 px-3 py-2 text-xs font-medium text-white transition hover:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              <Play className="h-3.5 w-3.5" /> Play here
+              <Users className="h-3.5 w-3.5" /> Listen together
             </button>
           ) : (
             <>

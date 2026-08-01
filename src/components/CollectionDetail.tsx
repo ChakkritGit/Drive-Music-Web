@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowLeft, Play, Shuffle } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, Play, Search, Shuffle } from "lucide-react";
 import type { DriveFile, PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { TrackRow } from "@/components/TrackRow";
@@ -21,6 +22,18 @@ interface CollectionDetailProps {
  * or pick a specific track themselves instead of immediately jumping into playback. */
 export function CollectionDetail({ title, subtitle, tracks, source, onBack }: CollectionDetailProps) {
   const { cachedTracks, shuffle, toggleShuffle, play, model } = usePlayer();
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  // The queue passed to each row stays the full, unfiltered collection — searching only
+  // changes what's displayed, not what plays next/prev, so up-next isn't scoped to the search.
+  const visibleTracks = tracks
+    .map((file, index) => ({ file, index }))
+    .filter(({ file }) => {
+      if (!normalizedQuery) return true;
+      const meta = cachedTracks.get(file.id)?.parsedMeta;
+      const haystack = [file.name, meta?.title, meta?.artist, meta?.album].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
 
   function handlePlayInOrder() {
     if (tracks.length === 0) return;
@@ -70,16 +83,30 @@ export function CollectionDetail({ title, subtitle, tracks, source, onBack }: Co
 
       {tracks.length > 0 && <DownloadAllButton files={tracks} />}
 
+      {tracks.length > 0 && (
+        <div className="relative mt-4 mb-4">
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search this collection…"
+            className="w-full rounded-full border border-zinc-200 bg-transparent py-2 pr-4 pl-9 text-sm text-zinc-700 outline-none focus:border-zinc-400 dark:border-zinc-800 dark:text-zinc-300"
+          />
+        </div>
+      )}
+
       {tracks.length === 0 ? (
         <p className="py-10 text-sm text-zinc-400">Nothing here yet.</p>
+      ) : visibleTracks.length === 0 ? (
+        <p className="py-10 text-sm text-zinc-400">No tracks match &quot;{query}&quot;.</p>
       ) : (
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-          {tracks.map((file, i) => (
+          {visibleTracks.map(({ file, index }) => (
             <TrackRow
-              key={`${file.id}-${i}`}
+              key={`${file.id}-${index}`}
               file={file}
               queue={tracks}
-              index={i}
+              index={index}
               cachedTrack={cachedTracks.get(file.id)}
               source={source}
             />

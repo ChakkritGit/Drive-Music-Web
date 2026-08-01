@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Download, PlayCircle } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, PlayCircle } from "lucide-react";
 import { SignInScreen } from "@/components/SignInScreen";
 import { FEATURE_GROUPS, FEATURE_SIZE } from "@/lib/features";
 import { HIDDEN_SIZE } from "@/lib/model";
@@ -638,6 +638,17 @@ function AdminDashboard() {
   const weightMax = flatWeights.length > 0 ? Math.max(...flatWeights) : 0;
   const latestEvent = events[0];
 
+  const EVENTS_PAGE_SIZE = 10;
+  const [eventsPage, setEventsPage] = useState(0);
+  // A newly-fetched event log can be shorter than the current page (or empty) — clamp back
+  // to a valid page instead of showing a blank table.
+  const eventsPageCount = Math.max(1, Math.ceil(events.length / EVENTS_PAGE_SIZE));
+  const clampedEventsPage = Math.min(eventsPage, eventsPageCount - 1);
+  const pagedEvents = events.slice(
+    clampedEventsPage * EVENTS_PAGE_SIZE,
+    (clampedEventsPage + 1) * EVENTS_PAGE_SIZE,
+  );
+
   const handlePlaySource = (source: RecentSource) => {
     play(source.tracks, 0, {
       type: source.type,
@@ -775,7 +786,7 @@ function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
-                  {events.map((e) => (
+                  {pagedEvents.map((e) => (
                     <tr key={e.id}>
                       <td className="max-w-[12rem] truncate py-2 text-zinc-700 dark:text-zinc-300">
                         {e.title}
@@ -793,6 +804,27 @@ function AdminDashboard() {
                   ))}
                 </tbody>
               </table>
+              {eventsPageCount > 1 && (
+                <div className="mt-3 flex items-center justify-between text-xs text-zinc-400">
+                  <button
+                    onClick={() => setEventsPage((p) => Math.max(0, p - 1))}
+                    disabled={clampedEventsPage === 0}
+                    className="flex items-center gap-1 rounded-full border border-zinc-200 px-2.5 py-1 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-30 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" /> Prev
+                  </button>
+                  <span>
+                    Page {clampedEventsPage + 1} of {eventsPageCount}
+                  </span>
+                  <button
+                    onClick={() => setEventsPage((p) => Math.min(eventsPageCount - 1, p + 1))}
+                    disabled={clampedEventsPage === eventsPageCount - 1}
+                    className="flex items-center gap-1 rounded-full border border-zinc-200 px-2.5 py-1 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-30 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                  >
+                    Next <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </section>

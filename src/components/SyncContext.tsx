@@ -27,6 +27,9 @@ const HEARTBEAT_MS = 15000;
 const STALE_MS = HEARTBEAT_MS * 3;
 const DEVICE_ID_KEY = "drive-music-device-id";
 const DEVICE_NAME_KEY = "drive-music-device-name";
+// How far local playback position is allowed to drift from the synced group's estimated
+// position (network/publish latency, buffering, ...) before snapping back in line.
+const SYNC_DRIFT_TOLERANCE_SEC = 1.5;
 
 function guessDeviceName(): string {
   if (typeof navigator === "undefined") return "This device";
@@ -65,8 +68,12 @@ interface SyncContextValue {
   /** The latest broadcast from a *different* device, or null if nothing's playing elsewhere
    * (or we haven't heard from another device yet). */
   remoteNowPlaying: SyncState | null;
-  /** Pulls remoteNowPlaying's queue/track into this device's own player and starts it here. */
-  claimPlayback: () => void;
+  /** Whether this device is in "Listen together" mode — see the reconciliation effect below. */
+  synced: boolean;
+  toggleSynced: () => void;
+  /** Whether sync is configured at all (a PartyKit host is set) — lets UI hide sync controls
+   * entirely rather than show a toggle that can never connect. */
+  syncAvailable: boolean;
 }
 
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -93,11 +100,12 @@ async function fetchSyncToken(): Promise<SyncTokenResponse | null> {
 }
 
 /** Mirrors "what's playing" across every tab/device signed into the same Google account, via
- * a PartyKit room (party/index.ts) keyed to that account. Purely additive: it reads from
- * PlayerContext to broadcast this device's own state, and only ever calls back into it
- * (`play(...)`) when the user explicitly hits "Play here" — it never silently takes over
- * local playback on its own. Deliberately does not do remote control (pausing/seeking another
- * device from here) — only mirroring + pulling playback to the current device. */
+ * a PartyKit room (party/index.ts) keyed to that account. Every device always broadcasts its
+ * own state (used for the passive "Playing on X" banner). Devices that opt into `synced`
+ * ("Listen together") additionally *apply* every incoming broadcast — track, play/pause, and
+ * position — to their own local playback. Since a synced device's own actions get broadcast
+ * the same way, two synced devices end up symmetric: whichever one you touch last (play,
+ * pause, seek, skip) becomes the state the other pulls itself back in line with. */
 export function SyncProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession();
   const player = usePlayer();
@@ -121,8 +129,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     const id = setInterval(() => setHeartbeatTick((t) => t + 1), HEARTBEAT_MS);
     return () => clearInterval(id);
   }, []);
-  // Lets claimPlayback always call the latest play() without needing `player` (which changes
-  // identity on every progress tick) in its own dependency array.
+  // Lets the reconciliation effect below always call the latest play()/togglePlay()/seek()
+  // without needing `player` (which changes identity on every progress tick) in its deps.
   const playerRef = useRef(player);
   useEffect(() => {
     playerRef.current = player;
@@ -224,19 +232,37 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [remoteNowPlaying]);
 
-  const claimPlayback = useCallback(() => {
-    if (!remoteNowPlaying) return;
-    playerRef.current.play(
-      remoteNowPlaying.queue,
-      remoteNowPlaying.currentIndex,
-      remoteNowPlaying.source ?? undefined,
-    );
-    setRemoteNowPlaying(null);
-  }, [remoteNowPlaying]);
+  const [synced, setSynced] = useState(false);
+  const toggleSynced = useCallback(() => setSynced((s) => !s), []);
+
+  // "Listen together": apply every incoming broadcast to local playback instead of just
+  // showing it in the banner. Runs on every new remoteNowPlaying (at minimum every
+  // HEARTBEAT_MS, immediately on a structural change) so drift — from network latency, a
+  // manual seek, or one device pausing — gets pulled back in line within a few seconds.
+  useEffect(() => {
+    if (!synced || !remoteNowPlaying) return;
+    const remote = remoteNowPlaying;
+    const remoteFile = remote.queue[remote.currentIndex];
+    if (!remoteFile) return;
+    const local = playerRef.current;
+
+    if (local.currentFile?.id !== remoteFile.id) {
+      local.play(remote.queue, remote.currentIndex, remote.source ?? undefined);
+      return; // let the next broadcast reconcile play/pause + position once loaded
+    }
+    if (remote.isPlaying !== local.isPlaying) local.togglePlay();
+
+    const estimatedRemoteProgress = remote.isPlaying
+      ? remote.progress + Math.max(0, (Date.now() - remote.updatedAt) / 1000)
+      : remote.progress;
+    if (Math.abs(local.progress - estimatedRemoteProgress) > SYNC_DRIFT_TOLERANCE_SEC) {
+      local.seek(estimatedRemoteProgress);
+    }
+  }, [synced, remoteNowPlaying]);
 
   const value = useMemo<SyncContextValue>(
-    () => ({ remoteNowPlaying, claimPlayback }),
-    [remoteNowPlaying, claimPlayback],
+    () => ({ remoteNowPlaying, synced, toggleSynced, syncAvailable: hostConfigured }),
+    [remoteNowPlaying, synced, toggleSynced, hostConfigured],
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

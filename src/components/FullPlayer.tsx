@@ -12,6 +12,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Users,
   Volume1,
   Volume2,
   VolumeX,
@@ -19,6 +20,7 @@ import {
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists } from "@/components/PlaylistsContext";
+import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
 import { TrackRow } from "@/components/TrackRow";
 
@@ -59,6 +61,7 @@ export function FullPlayer() {
     removeFromQueue,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
+  const { synced, toggleSynced, syncAvailable } = useSync();
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
   const [lastVolume, setLastVolume] = useState(1);
@@ -130,7 +133,23 @@ export function FullPlayer() {
         <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
           Now Playing
         </p>
-        <div className="w-9" />
+        {syncAvailable ? (
+          <button
+            onClick={toggleSynced}
+            className={clsx(
+              "rounded-full p-2 transition active:scale-90",
+              synced
+                ? "text-emerald-500"
+                : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
+            )}
+            aria-label={synced ? "Stop listening together" : "Listen together"}
+            title={synced ? "Listening together" : "Listen together"}
+          >
+            <Users className="h-5 w-5" />
+          </button>
+        ) : (
+          <div className="w-9" />
+        )}
       </div>
 
       <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
