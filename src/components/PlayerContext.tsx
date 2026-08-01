@@ -1407,11 +1407,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       navigator.mediaSession.metadata = null;
       return;
     }
+    // iOS is strict about `artwork` entries — a `src` alone isn't enough; it silently drops
+    // the image (no error, just no artwork shown) without a `type` and `sizes` too. The MIME
+    // type is embedded in `pictureDataUrl` itself (`data:<format>;base64,...`, see
+    // pictureToDataUrl in src/lib/metadata.ts), so it's pulled out of the string rather than
+    // tracked separately. The real pixel dimensions of embedded cover art aren't known (it's
+    // whatever size was baked into the file's tags), so `sizes` is a generic best-guess rather
+    // than exact — sizes is a hint for picking among *multiple* candidates, not a strict
+    // validator, so an approximate value is fine when there's only one image to offer anyway.
+    const artworkType = currentMeta?.pictureDataUrl?.match(/^data:([^;]+);/)?.[1] ?? "image/jpeg";
     navigator.mediaSession.metadata = new MediaMetadata({
       title: currentMeta?.title || currentFile.name,
       artist: currentMeta?.artist || "",
       album: currentMeta?.album || "",
-      artwork: currentMeta?.pictureDataUrl ? [{ src: currentMeta.pictureDataUrl }] : [],
+      artwork: currentMeta?.pictureDataUrl
+        ? [{ src: currentMeta.pictureDataUrl, sizes: "512x512", type: artworkType }]
+        : [],
     });
   }, [currentFile, currentMeta]);
 
