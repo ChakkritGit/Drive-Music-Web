@@ -56,9 +56,12 @@ export function Player() {
   const { remoteNowPlaying, claimPlayback } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
-  // Only surface what's playing on another device when nothing's loaded here — once this
-  // device has its own track, its own state is what matters locally.
-  const remoteTrack = !currentFile ? remoteNowPlaying : null;
+  // Only surface what's playing on another device while this one isn't actively playing —
+  // once this device is playing its own track, its own state is what matters locally. Not
+  // gated on `currentFile` alone: a restored-but-paused session (see PlayerContext's
+  // loadPlaybackSession effect) would otherwise permanently hide the banner after the very
+  // first local play, since a device almost always has *some* track loaded after that.
+  const remoteTrack = !isPlaying ? remoteNowPlaying : null;
   const remoteFile = remoteTrack?.queue[remoteTrack.currentIndex];
   // The mobile bottom tab nav (see app/(app)/layout.tsx) renders for every route in that group
   // (home/browse/playlists/library) once signed in — /admin is the only route outside it.
@@ -164,10 +167,10 @@ export function Player() {
           className="min-w-0 flex-1 text-left disabled:cursor-default"
         >
           <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            {currentFile
-              ? currentMeta?.title || currentFile.name
-              : remoteFile
-                ? remoteFile.name.replace(/\.[^./]+$/, "")
+            {remoteTrack && remoteFile
+              ? remoteFile.name.replace(/\.[^./]+$/, "")
+              : currentFile
+                ? currentMeta?.title || currentFile.name
                 : "No track playing"}
           </p>
           <p className="truncate text-xs text-zinc-400">
