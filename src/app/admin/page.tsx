@@ -314,6 +314,20 @@ function AdminDashboard() {
           <WeightBarChart groups={groupMagnitudes} />
         </section>
 
+        <section className="mb-8 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <h2 className="mb-4 text-sm font-medium text-zinc-500 dark:text-zinc-400">
+            Live training visualizer
+          </h2>
+          <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+            <iframe
+              src="/admin/nn-visualizer.html"
+              title="Neural network training visualizer"
+              className="h-[820px] w-full border-0"
+              loading="lazy"
+            />
+          </div>
+        </section>
+
         <section className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
           <h2 className="mb-4 text-sm font-medium text-zinc-500 dark:text-zinc-400">
             Recent training events
