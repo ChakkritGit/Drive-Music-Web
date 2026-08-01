@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -13,7 +13,6 @@ import {
   listModelEvents,
   listPlaylists,
   listRecentSources,
-  loadModel,
 } from "@/lib/db";
 import { usePlayer } from "@/components/PlayerContext";
 import type {
@@ -135,6 +134,436 @@ function WeightBarChart({
   );
 }
 
+// Same order as FEATURE_GROUPS (src/lib/features.ts) — purely a display concern, so it's
+// kept local to this component rather than in the shared feature-extraction module.
+const GROUP_COLORS = [
+  "#94a3b8", // Bias
+  "#22d3ee", // Time of day
+  "#a78bfa", // Weekday
+  "#34d399", // Artist
+  "#fbbf24", // Album
+  "#f472b6", // Track
+];
+const POS_COLOR = "#2a78d6"; // positive weight
+const NEG_COLOR = "#e05a5a"; // negative weight
+const PULSE_COLOR = "#7dd3fc";
+
+interface Particle {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  t: number;
+  duration: number;
+}
+
+interface Layout {
+  input: { x: number; y: number }[];
+  hidden: { x: number; y: number }[];
+  output: { x: number; y: number };
+}
+
+function computeLayout(width: number, height: number): Layout {
+  const marginX = width * 0.08;
+  const stepIn = height / (FEATURE_SIZE + 1);
+  const stepHid = height / (HIDDEN_SIZE + 1);
+  return {
+    input: Array.from({ length: FEATURE_SIZE }, (_, i) => ({
+      x: marginX,
+      y: stepIn * (i + 1),
+    })),
+    hidden: Array.from({ length: HIDDEN_SIZE }, (_, h) => ({
+      x: width / 2,
+      y: stepHid * (h + 1),
+    })),
+    output: { x: width - marginX, y: height / 2 },
+  };
+}
+
+const inputGroupColors: string[] = FEATURE_GROUPS.flatMap((g, gi) =>
+  Array(g.size).fill(GROUP_COLORS[gi % GROUP_COLORS.length]),
+);
+
+/** Which feature group a raw input index falls in, and its position within that group. */
+function describeInputIndex(index: number): { label: string; localIndex: number } {
+  let offset = 0;
+  for (const g of FEATURE_GROUPS) {
+    if (index < offset + g.size) return { label: g.label, localIndex: index - offset };
+    offset += g.size;
+  }
+  return { label: "Unknown", localIndex: index };
+}
+
+/**
+ * Renders the model's actual w1/w2 weight matrices as a node graph — no synthetic data.
+ * A pulse wave animates through the strongest connections whenever `model.trainingEvents`
+ * genuinely increases (a real trainStep() ran, e.g. because a track finished playing).
+ */
+function NetworkVisualizer({
+  model,
+  latestEvent,
+}: {
+  model: ListeningModel;
+  latestEvent: ModelEvent | undefined;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const layoutRef = useRef<Layout>(computeLayout(600, 560));
+  const hoveredRef = useRef<{ kind: "input" | "hidden" | "output"; index: number } | null>(null);
+  const modelRef = useRef(model);
+  const latestEventRef = useRef(latestEvent);
+  const particlesRef = useRef<Particle[]>([]);
+  const prevTrainingEventsRef = useRef<number | null>(null);
+  const prevTsRef = useRef<number | null>(null);
+  const prefersDarkRef = useRef(true);
+
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
+
+  useEffect(() => {
+    latestEventRef.current = latestEvent;
+  }, [latestEvent]);
+
+  // Canvas text can't use Tailwind's `dark:` variant, so track the media query directly —
+  // keeps the always-on bias labels readable against both the light and dark canvas surface.
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    prefersDarkRef.current = mq.matches;
+    const handleChange = (e: MediaQueryListEvent) => {
+      prefersDarkRef.current = e.matches;
+    };
+    mq.addEventListener("change", handleChange);
+    return () => mq.removeEventListener("change", handleChange);
+  }, []);
+
+  // Spawn a pulse wave only in response to a real, new training event — never on a timer.
+  useEffect(() => {
+    const prev = prevTrainingEventsRef.current;
+    prevTrainingEventsRef.current = model.trainingEvents;
+    if (prev === null || model.trainingEvents <= prev) return;
+
+    const { input, hidden, output } = layoutRef.current;
+    const ranked: [number, number, number][] = [];
+    for (let h = 0; h < model.w1.length; h++) {
+      for (let i = 0; i < model.w1[h].length; i++) {
+        ranked.push([Math.abs(model.w1[h][i]), i, h]);
+      }
+    }
+    ranked.sort((a, b) => b[0] - a[0]);
+    const wave1: Particle[] = ranked.slice(0, 40).map(([, i, h]) => ({
+      x0: input[i].x,
+      y0: input[i].y,
+      x1: hidden[h].x,
+      y1: hidden[h].y,
+      t: 0,
+      duration: 500,
+    }));
+    particlesRef.current.push(...wave1);
+
+    const timer = setTimeout(() => {
+      const wave2: Particle[] = hidden.map((h) => ({
+        x0: h.x,
+        y0: h.y,
+        x1: output.x,
+        y1: output.y,
+        t: 0,
+        duration: 400,
+      }));
+      particlesRef.current.push(...wave2);
+    }, 520);
+    return () => clearTimeout(timer);
+  }, [model]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const cssH = Math.max(420, Math.min(640, window.innerHeight * 0.62));
+      canvas.width = rect.width * dpr;
+      canvas.height = cssH * dpr;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${cssH}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      layoutRef.current = computeLayout(rect.width, cssH);
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+
+    let rafId: number;
+    const frame = (ts: number) => {
+      const dt = prevTsRef.current == null ? 16 : ts - prevTsRef.current;
+      prevTsRef.current = ts;
+      particlesRef.current = particlesRef.current.filter((p) => {
+        p.t += dt / p.duration;
+        return p.t < 1;
+      });
+
+      const { input, hidden, output } = layoutRef.current;
+      const w = canvas.width / (window.devicePixelRatio || 1);
+      const h = canvas.height / (window.devicePixelRatio || 1);
+      ctx.clearRect(0, 0, w, h);
+
+      const m = modelRef.current;
+      // w1 and w2 live on very different natural scales (w1 starts randomly around
+      // ±0.1, w2 starts at exactly 0 and only grows slowly via real training steps), so
+      // each layer is normalized against its own max — otherwise an early w2 barely
+      // registers next to w1's much larger init spread and the output side reads as blank.
+      const maxAbsW1 = Math.max(...m.w1.flat().map(Math.abs), 1e-4);
+      const maxAbsW2 = Math.max(...m.w2.map(Math.abs), 1e-4);
+
+      // Hovering a hidden node dims every edge that isn't attached to it, so its actual
+      // wiring (which inputs feed it, what it sends to the output) stands out from the rest.
+      const hovered = hoveredRef.current;
+      const hoveredHidden = hovered?.kind === "hidden" ? hovered.index : null;
+
+      ctx.lineCap = "round";
+      for (let hi = 0; hi < m.w1.length; hi++) {
+        const hp = hidden[hi];
+        const dim = hoveredHidden !== null && hoveredHidden !== hi;
+        for (let i = 0; i < m.w1[hi].length; i++) {
+          const wgt = m.w1[hi][i];
+          const frac = Math.abs(wgt) / maxAbsW1;
+          if (frac < 0.02) continue;
+          const ip = input[i];
+          ctx.globalAlpha = Math.min(1, frac) * 0.55 * (dim ? 0.1 : 1);
+          ctx.strokeStyle = wgt >= 0 ? POS_COLOR : NEG_COLOR;
+          ctx.lineWidth = 0.35 + frac * 1.6;
+          ctx.beginPath();
+          ctx.moveTo(ip.x, ip.y);
+          ctx.lineTo(hp.x, hp.y);
+          ctx.stroke();
+        }
+      }
+      for (let hi = 0; hi < m.w2.length; hi++) {
+        const hp = hidden[hi];
+        const wgt = m.w2[hi];
+        const frac = Math.abs(wgt) / maxAbsW2;
+        const dim = hoveredHidden !== null && hoveredHidden !== hi;
+        ctx.globalAlpha = Math.min(1, Math.max(frac, 0.08)) * 0.85 * (dim ? 0.1 : 1);
+        ctx.strokeStyle = wgt >= 0 ? POS_COLOR : NEG_COLOR;
+        ctx.lineWidth = 0.6 + frac * 3;
+        ctx.beginPath();
+        ctx.moveTo(hp.x, hp.y);
+        ctx.lineTo(output.x, output.y);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      for (const p of particlesRef.current) {
+        const ease = p.t < 0.5 ? 2 * p.t * p.t : 1 - Math.pow(-2 * p.t + 2, 2) / 2;
+        const x = p.x0 + (p.x1 - p.x0) * ease;
+        const y = p.y0 + (p.y1 - p.y0) * ease;
+        ctx.save();
+        ctx.globalAlpha = Math.sin(p.t * Math.PI);
+        ctx.fillStyle = PULSE_COLOR;
+        ctx.shadowColor = PULSE_COLOR;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      input.forEach((p, i) => {
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = inputGroupColors[i];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+
+      hidden.forEach((p, hi) => {
+        const contribution = Math.abs(m.w2[hi]) / maxAbsW2;
+        const r = 6 + contribution * 5;
+        ctx.save();
+        ctx.shadowColor = "#3987e5";
+        ctx.shadowBlur = 4 + contribution * 12;
+        ctx.fillStyle = "#0f172a";
+        ctx.strokeStyle = "#3987e5";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      const predicted = latestEventRef.current?.predicted ?? 0;
+      ctx.save();
+      ctx.shadowColor = "#34d399";
+      ctx.shadowBlur = 10 + predicted * 26;
+      ctx.fillStyle = "#0f172a";
+      ctx.strokeStyle = "#34d399";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(output.x, output.y, 13 + predicted * 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      // Always-on value labels — each node's own bias, the one number that genuinely
+      // belongs to the node itself rather than to a connection.
+      const labelColor = prefersDarkRef.current ? "#cbd5e1" : "#3f3f46";
+      ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = labelColor;
+      ctx.globalAlpha = 0.9;
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      hidden.forEach((p, hi) => {
+        const bias = m.b1[hi];
+        ctx.fillText(`${bias >= 0 ? "+" : ""}${bias.toFixed(3)}`, p.x + 16, p.y);
+      });
+      ctx.textAlign = "center";
+      ctx.fillText(
+        `${m.b2 >= 0 ? "+" : ""}${m.b2.toFixed(3)}`,
+        output.x,
+        output.y + 13 + predicted * 6 + 12,
+      );
+      ctx.textAlign = "left";
+      ctx.globalAlpha = 1;
+
+      rafId = requestAnimationFrame(frame);
+    };
+    rafId = requestAnimationFrame(frame);
+
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  const handlePointerMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    const tooltip = tooltipRef.current;
+    if (!canvas || !tooltip) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const { input, hidden, output } = layoutRef.current;
+    const m = modelRef.current;
+
+    type HoverTarget = { kind: "input" | "hidden" | "output"; index: number; dist: number; x: number; y: number };
+    const closest: { value: HoverTarget | null } = { value: null };
+    const consider = (kind: HoverTarget["kind"], index: number, px: number, py: number, hitRadius: number) => {
+      const dist = Math.hypot(px - x, py - y);
+      if (dist <= hitRadius && (!closest.value || dist < closest.value.dist)) {
+        closest.value = { kind, index, dist, x: px, y: py };
+      }
+    };
+    input.forEach((p, i) => consider("input", i, p.x, p.y, 6));
+    hidden.forEach((p, h) => consider("hidden", h, p.x, p.y, 11));
+    consider("output", 0, output.x, output.y, 17);
+
+    const best = closest.value;
+    hoveredRef.current = best ? { kind: best.kind, index: best.index } : null;
+    if (!best) {
+      tooltip.style.display = "none";
+      return;
+    }
+
+    let lines: string[];
+    if (best.kind === "input") {
+      const { label, localIndex } = describeInputIndex(best.index);
+      let total = 0;
+      for (const row of m.w1) total += Math.abs(row[best.index]);
+      const importance = total / m.w1.length;
+      lines = [`${label} #${localIndex + 1}`, `avg |weight| → hidden: ${importance.toFixed(3)}`];
+    } else if (best.kind === "hidden") {
+      lines = [
+        `Hidden unit ${best.index + 1}`,
+        `bias: ${m.b1[best.index].toFixed(3)}`,
+        `weight → output: ${m.w2[best.index].toFixed(3)}`,
+      ];
+    } else {
+      const predicted = latestEventRef.current?.predicted;
+      lines = [
+        "Output",
+        `bias: ${m.b2.toFixed(3)}`,
+        ...(predicted !== undefined ? [`last predicted: ${Math.round(predicted * 100)}%`] : []),
+      ];
+    }
+    tooltip.innerHTML = lines
+      .map((l, i) => (i === 0 ? `<div class="font-medium">${l}</div>` : `<div>${l}</div>`))
+      .join("");
+
+    // Measure before placing, then clamp inside the container — the container clips
+    // overflow, so a tooltip simply centered on an edge node would get cut off and
+    // become unreadable.
+    const container = containerRef.current;
+    if (!container) return;
+    tooltip.style.display = "block";
+    tooltip.style.visibility = "hidden";
+    const containerRect = container.getBoundingClientRect();
+    const tw = tooltip.offsetWidth;
+    const th = tooltip.offsetHeight;
+    const margin = 6;
+
+    let left = best.x - tw / 2;
+    left = Math.min(Math.max(left, margin), containerRect.width - tw - margin);
+
+    let top = best.y - th - 10; // prefer above the node
+    if (top < margin) top = best.y + 14; // flip below if that would clip at the top
+    top = Math.min(top, containerRect.height - th - margin);
+
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    tooltip.style.visibility = "visible";
+  };
+
+  const handlePointerLeave = () => {
+    if (tooltipRef.current) tooltipRef.current.style.display = "none";
+    hoveredRef.current = null;
+  };
+
+  return (
+    <div>
+      <div
+        ref={containerRef}
+        className="relative w-full overflow-hidden rounded-xl bg-zinc-100 dark:bg-zinc-950"
+      >
+        <canvas
+          ref={canvasRef}
+          className="block w-full"
+          onMouseMove={handlePointerMove}
+          onMouseLeave={handlePointerLeave}
+        />
+        <div
+          ref={tooltipRef}
+          className="pointer-events-none absolute top-0 left-0 z-10 hidden rounded-md border border-zinc-200 bg-white/95 px-2 py-1 text-[11px] whitespace-nowrap text-zinc-700 shadow-lg dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-100"
+        />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] text-zinc-500">
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          {FEATURE_GROUPS.map((g, i) => (
+            <span key={g.label} className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: GROUP_COLORS[i % GROUP_COLORS.length] }}
+              />
+              {g.label}
+            </span>
+          ))}
+        </div>
+        <span>
+          {latestEvent
+            ? `Last trained on "${latestEvent.title}" — predicted ${Math.round(latestEvent.predicted * 100)}%, listened ${Math.round(latestEvent.fraction * 100)}%`
+            : "No training events yet — play a track to the end to start training."}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function sourceLabel(type: "folder" | "playlist" | "library"): string {
   if (type === "playlist") return "Playlist";
   if (type === "library") return "Library";
@@ -143,11 +572,14 @@ function sourceLabel(type: "folder" | "playlist" | "library"): string {
 
 function AdminDashboard() {
   const router = useRouter();
-  const { play } = usePlayer();
+  // `model` is the live PlayerContext state (see src/components/PlayerContext.tsx) — the
+  // same object trainStep() mutates when a track finishes, anywhere in the app. Reading it
+  // from context instead of a one-off loadModel() means every stat and the network
+  // visualizer below re-render the instant a real training step happens.
+  const { play, model } = usePlayer();
   const [cachedTracks, setCachedTracks] = useState<CachedTrack[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
-  const [model, setModel] = useState<ListeningModel | null>(null);
   const [events, setEvents] = useState<ModelEvent[]>([]);
   const [storageEstimate, setStorageEstimate] = useState<{
     usage: number;
@@ -159,13 +591,11 @@ function AdminDashboard() {
       listCachedTracks(),
       listPlaylists(),
       listRecentSources(50),
-      loadModel(),
       listModelEvents(50),
-    ]).then(([tracks, pls, recents, mdl, evts]) => {
+    ]).then(([tracks, pls, recents, evts]) => {
       setCachedTracks(tracks);
       setPlaylists(pls);
       setRecentSources(recents);
-      setModel(mdl);
       setEvents(evts);
     });
 
@@ -178,6 +608,15 @@ function AdminDashboard() {
     }
   }, []);
 
+  // Re-fetch the event log whenever a real training step lands, instead of polling.
+  const prevTrainingEventsRef = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = prevTrainingEventsRef.current;
+    prevTrainingEventsRef.current = model.trainingEvents;
+    if (prev === null || model.trainingEvents <= prev) return;
+    listModelEvents(50).then(setEvents);
+  }, [model.trainingEvents]);
+
   const totalCacheBytes = useMemo(
     () => cachedTracks.reduce((sum, t) => sum + (t.blob?.size ?? 0), 0),
     [cachedTracks],
@@ -187,19 +626,17 @@ function AdminDashboard() {
     [playlists],
   );
   const groupMagnitudes = useMemo(
-    () => (model ? computeGroupMagnitudes(model.w1) : []),
+    () => computeGroupMagnitudes(model.w1),
     [model],
   );
-  const flatWeights = useMemo(
-    () => (model ? flattenWeights(model) : []),
-    [model],
-  );
+  const flatWeights = useMemo(() => flattenWeights(model), [model]);
   const weightNorm = useMemo(
     () => Math.sqrt(flatWeights.reduce((sum, w) => sum + w * w, 0)),
     [flatWeights],
   );
   const weightMin = flatWeights.length > 0 ? Math.min(...flatWeights) : 0;
   const weightMax = flatWeights.length > 0 ? Math.max(...flatWeights) : 0;
+  const latestEvent = events[0];
 
   const handlePlaySource = (source: RecentSource) => {
     play(source.tracks, 0, {
@@ -224,8 +661,7 @@ function AdminDashboard() {
             Admin Dashboard
           </h1>
           <button
-            onClick={() => model && downloadModel(model)}
-            disabled={!model}
+            onClick={() => downloadModel(model)}
             className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-sm whitespace-nowrap text-white transition hover:opacity-90 disabled:cursor-default disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
           >
             <Download className="h-4 w-4" />{" "}
@@ -247,7 +683,7 @@ function AdminDashboard() {
           />
           <StatTile
             label="Training events"
-            value={String(model?.trainingEvents ?? 0)}
+            value={String(model.trainingEvents)}
           />
           {storageEstimate && (
             <StatTile
@@ -306,26 +742,17 @@ function AdminDashboard() {
             <StatTile label="Max weight" value={weightMax.toFixed(3)} />
           </div>
           <p className="mb-3 text-xs text-zinc-400">
-            Average weight magnitude by feature group
-            {model && (
-              <> — last updated {new Date(model.updatedAt).toLocaleString()}</>
-            )}
+            Average weight magnitude by feature group — last updated{" "}
+            {new Date(model.updatedAt).toLocaleString()}
           </p>
           <WeightBarChart groups={groupMagnitudes} />
         </section>
 
         <section className="mb-8 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
           <h2 className="mb-4 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-            Live training visualizer
+            Network activity
           </h2>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-            <iframe
-              src="/admin/nn-visualizer.html"
-              title="Neural network training visualizer"
-              className="h-[820px] w-full border-0"
-              loading="lazy"
-            />
-          </div>
+          <NetworkVisualizer model={model} latestEvent={latestEvent} />
         </section>
 
         <section className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
