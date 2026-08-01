@@ -3,18 +3,20 @@ import { loadImage } from "@/lib/color";
 // Output resolution — big enough to stay sharp at the artwork's largest on-screen size
 // (~320px, plus retina headroom) without ballooning canvas/memory cost.
 const OUTPUT_SIZE = 480;
-// The gradient's inner/outer radius as a fraction of the canvas — inside the inner radius the
-// image stays fully opaque; between inner and outer it fades to fully transparent.
-const FADE_INNER = 0.32;
-const FADE_OUTER = 0.5;
+// Corner radius and edge-blur amount, as fractions of the canvas, for the rounded-square
+// feather mask — kept proportionally close to the artwork container's own `rounded-2xl`.
+const CORNER_RADIUS = OUTPUT_SIZE * 0.14;
+const FEATHER_BLUR = OUTPUT_SIZE * 0.06;
 
 /**
  * Draws `dataUrl` onto a square canvas (cropped to fill it, like CSS `object-fit: cover`),
- * then erases a soft radial ring at the edges so the image's own pixels fade to real
- * transparency there — not a color overlay on top, actual alpha in the bitmap — so whatever
- * sits behind the element on screen shows through smoothly, the same way a CSS mask-image
- * would (used instead of one because mask-image didn't render reliably in testing). Falls back
- * to returning `dataUrl` unchanged if decoding or canvas access fails.
+ * then erases a soft blurred ring around a rounded-rect near the edges so the image's own
+ * pixels fade to real transparency there — not a color overlay on top, actual alpha in the
+ * bitmap — so whatever sits behind the element on screen shows through smoothly, the same way
+ * a CSS mask-image would (used instead of one because mask-image didn't render reliably in
+ * testing). The mask follows a rounded-square shape (matching the artwork container) rather
+ * than a circle, so the artwork itself doesn't fade to a circle well before reaching its
+ * corners. Falls back to returning `dataUrl` unchanged if decoding or canvas access fails.
  */
 export async function featherImageEdges(dataUrl: string): Promise<string> {
   try {
@@ -37,22 +39,21 @@ export async function featherImageEdges(dataUrl: string): Promise<string> {
     );
 
     // "destination-in" keeps the existing (already-drawn) pixels only where this next shape
-    // is opaque, scaled by its alpha — painting a black-to-transparent radial gradient here
-    // multiplies the image's alpha down to 0 out toward the edges.
+    // is opaque, scaled by its alpha — filling a blurred rounded-rect here fades the image's
+    // alpha to 0 only near its true rounded-square boundary (the blur softens just that edge),
+    // instead of a radial gradient eating into it from the center in a circle.
     ctx.globalCompositeOperation = "destination-in";
-    const center = OUTPUT_SIZE / 2;
-    const gradient = ctx.createRadialGradient(
-      center,
-      center,
-      OUTPUT_SIZE * FADE_INNER,
-      center,
-      center,
-      OUTPUT_SIZE * FADE_OUTER,
+    ctx.filter = `blur(${FEATHER_BLUR}px)`;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.roundRect(
+      FEATHER_BLUR,
+      FEATHER_BLUR,
+      OUTPUT_SIZE - FEATHER_BLUR * 2,
+      OUTPUT_SIZE - FEATHER_BLUR * 2,
+      CORNER_RADIUS,
     );
-    gradient.addColorStop(0, "rgba(0, 0, 0, 1)");
-    gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    ctx.fill();
 
     return canvas.toDataURL();
   } catch {
