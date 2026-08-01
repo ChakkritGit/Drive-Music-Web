@@ -228,3 +228,27 @@ export async function savePlaybackSession(
   const db = await getDb();
   await db.put(PLAYBACK_SESSION_STORE, session);
 }
+
+/** Wipes every store (downloaded tracks, playlists, model, history, playback session) plus
+ * every "drive-music-"-prefixed localStorage key (device sync identity, crossfade/idle-motion
+ * prefs) — everything this app keeps on the device. Does not sign the user out of Google;
+ * that's a separate, cookie-based session. Irreversible — callers must confirm with the user
+ * first. */
+export async function clearAllData(): Promise<void> {
+  const db = await getDb();
+  await Promise.all([
+    db.clear(TRACKS_STORE),
+    db.clear(PLAYLISTS_STORE),
+    db.clear(RECENT_SOURCES_STORE),
+    db.clear(MODEL_STORE),
+    db.clear(MODEL_EVENTS_STORE),
+    db.clear(PLAYBACK_SESSION_STORE),
+  ]);
+
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith("drive-music-")) keysToRemove.push(key);
+  }
+  keysToRemove.forEach((key) => localStorage.removeItem(key));
+}

@@ -1,7 +1,8 @@
 import "fake-indexeddb/auto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   addTrackToPlaylist,
+  clearAllData,
   createPlaylist,
   deleteCachedTrack,
   deletePlaylist,
@@ -254,5 +255,56 @@ describe("modelEvents store", () => {
     const ids = new Set(events.map((e) => e.id));
     expect(ids.has("bulk-519")).toBe(true);
     expect(ids.has("bulk-0")).toBe(false);
+  });
+});
+
+describe("clearAllData", () => {
+  it("wipes every store and every drive-music-prefixed localStorage key, leaving others alone", async () => {
+    // This suite runs under vitest's node test environment, which has no `localStorage`
+    // global — a minimal in-memory shim stands in for it just for this test.
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return store.size;
+      },
+      key: (i: number) => Array.from(store.keys())[i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    });
+
+    await putCachedTrack({
+      fileId: "clear-me",
+      blob: new Blob(["x"]),
+      mimeType: "audio/mpeg",
+      driveMeta: file("clear-me"),
+      parsedMeta: {},
+      cachedAt: Date.now(),
+    });
+    await createPlaylist("Will be cleared");
+    await recordRecentSource({
+      type: "folder",
+      id: "clear-source",
+      name: "Clear me",
+      tracks: [],
+      lastPlayedAt: Date.now(),
+    });
+    const model = createDefaultModel();
+    model.trainingEvents = 7;
+    await saveModel(model);
+    localStorage.setItem("drive-music-crossfade-enabled", "true");
+    localStorage.setItem("unrelated-key", "should-survive");
+
+    await clearAllData();
+
+    expect(await listCachedTracks()).toEqual([]);
+    expect(await listPlaylists()).toEqual([]);
+    expect(await listRecentSources(50)).toEqual([]);
+    expect((await loadModel()).trainingEvents).toBe(0);
+    expect(localStorage.getItem("drive-music-crossfade-enabled")).toBeNull();
+    expect(localStorage.getItem("unrelated-key")).toBe("should-survive");
+
+    vi.unstubAllGlobals();
   });
 });
