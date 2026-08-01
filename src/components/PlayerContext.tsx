@@ -819,7 +819,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       void tryPlay(incoming);
 
       const targetVolume = volume;
-      const durationMs = Math.max(0.01, crossfadeSeconds) * 1000;
+      // Never let the ramp outlast the outgoing track — `timeupdate` doesn't tick every
+      // frame, so by the time this fires the real time left can already be a bit under
+      // `crossfadeSeconds`. A ramp that runs past the track's natural end means the browser's
+      // own end-of-media `pause` event fires while the ramp is still going, which (see
+      // handlePause) would otherwise be misread as the user pausing and cancel the fade.
+      const remaining = outgoing.duration - outgoing.currentTime;
+      const durationMs = Math.max(0.01, Math.min(crossfadeSeconds, remaining)) * 1000;
       const startTime = performance.now();
 
       const tick = (now: number) => {
@@ -982,7 +988,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const handlePause = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       if (e.currentTarget !== getActiveAudio()) return;
-      if (crossfadeStateRef.current) cancelCrossfade();
+      // The browser fires `pause` immediately before `ended` when a track reaches its
+      // natural end. If a crossfade is still ramping at that exact moment (clock drift
+      // between the audio element's own playback clock and the rAF-driven ramp, even with
+      // the ramp clamped to the track's remaining time), let the ramp's own completion
+      // commit the transition instead of reading this as the user pausing and cancelling
+      // the already-fading-in next track.
+      if (crossfadeStateRef.current) {
+        if (e.currentTarget.ended) return;
+        cancelCrossfade();
+      }
       setIsPlaying(false);
       persistSession(progressRef.current);
     },

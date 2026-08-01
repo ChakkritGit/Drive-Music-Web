@@ -59,12 +59,12 @@ function SettingsView() {
               role="switch"
               aria-checked={crossfadeEnabled}
               onClick={() => setCrossfadeEnabled(!crossfadeEnabled)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition ${
-                crossfadeEnabled ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-200 dark:bg-zinc-800"
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                crossfadeEnabled ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-300 dark:bg-zinc-700"
               }`}
             >
               <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform dark:bg-zinc-900 ${
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform dark:bg-zinc-900 ${
                   crossfadeEnabled ? "translate-x-[1.375rem]" : "translate-x-0.5"
                 }`}
               />
