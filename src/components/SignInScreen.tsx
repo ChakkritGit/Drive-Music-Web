@@ -1,6 +1,7 @@
 "use client";
 
 import { signIn } from "next-auth/react";
+import Link from "next/link";
 import { Music } from "lucide-react";
 
 export function SignInScreen() {
@@ -20,6 +21,17 @@ export function SignInScreen() {
         >
           Sign in with Google
         </button>
+        <p className="mt-4 text-[11px] text-zinc-400">
+          By continuing, you agree to the{" "}
+          <Link href="/terms" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
+            Terms of Service
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
+            Privacy Policy
+          </Link>
+          .
+        </p>
       </div>
     </div>
   );

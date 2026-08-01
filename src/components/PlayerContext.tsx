@@ -1071,6 +1071,24 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [currentFile, togglePlay]);
 
+  // A backgrounded tab can get a spurious `pause` (and no matching `play` back) fired on the
+  // active audio element — browsers sometimes hiccup background media playback this way for
+  // power/CPU throttling, especially with no Media Session API registered to mark this as
+  // legitimate background audio. The element itself keeps right on playing, but `isPlaying`
+  // is left stuck at false, showing the Play icon over audio that's still actually going.
+  // Resyncing from the DOM's own `paused` truth whenever the tab regains visibility catches
+  // this without needing to chase the browser's exact throttling behavior.
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState !== "visible") return;
+      const audio = getActiveAudio();
+      if (!audio) return;
+      setIsPlaying((current) => (current === audio.paused ? !audio.paused : current));
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [getActiveAudio]);
+
   // Returns [order, positionOfPinned], reseeding the window only when it's stale (`pinned`
   // isn't in it — a fresh queue, or shuffle was just turned on) — a cheap no-op otherwise.
   // `order` is deliberately not the whole queue shuffled — see seedShuffleWindow.
