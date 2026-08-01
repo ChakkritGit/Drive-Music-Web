@@ -26,6 +26,10 @@ export interface CachedTrack {
   driveMeta: DriveFile;
   parsedMeta: ParsedMetadata;
   cachedAt: number;
+  /** Playback volume multiplier in (0, 1] that brings this track's loudness down to the
+   * normalization target — see src/lib/loudness.ts. Undefined until analyzed (treated as 1,
+   * i.e. unchanged) — analysis runs once in the background the first time a track is cached. */
+  loudnessGain?: number;
 }
 
 /** Minimal shape needed to render and play a track, whichever source it came from. */

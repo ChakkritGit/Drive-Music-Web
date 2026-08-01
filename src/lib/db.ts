@@ -94,6 +94,18 @@ export async function deleteCachedTrack(fileId: string): Promise<void> {
   await db.delete(TRACKS_STORE, fileId);
 }
 
+/** Patches in a track's analyzed loudness gain (see src/lib/loudness.ts) after the fact — a
+ * no-op if the track has since been removed from the cache. */
+export async function updateTrackLoudnessGain(
+  fileId: string,
+  loudnessGain: number,
+): Promise<void> {
+  const db = await getDb();
+  const existing = await db.get(TRACKS_STORE, fileId);
+  if (!existing) return;
+  await db.put(TRACKS_STORE, { ...existing, loudnessGain });
+}
+
 export async function listCachedTracks(): Promise<CachedTrack[]> {
   const db = await getDb();
   const all = await db.getAll(TRACKS_STORE);

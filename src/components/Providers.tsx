@@ -8,6 +8,7 @@ import { PlaylistsProvider } from "@/components/PlaylistsContext";
 import { SyncProvider } from "@/components/SyncContext";
 import { Player } from "@/components/Player";
 import { FullPlayer } from "@/components/FullPlayer";
+import { LoudnessAnalysisIndicator } from "@/components/LoudnessAnalysisIndicator";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -34,6 +35,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
               {children}
               <Player />
               <FullPlayer />
+              <LoudnessAnalysisIndicator />
             </PlaylistsProvider>
           </SyncProvider>
         </PlayerProvider>

@@ -24,6 +24,7 @@ import { downloadFile } from "@/lib/drive";
 import { parseTrackMetadata } from "@/lib/metadata";
 import { extractFeatures } from "@/lib/features";
 import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
+import { analyzeLoudnessGain } from "@/lib/loudness";
 import {
   deleteCachedTrack,
   getCachedTrack,
@@ -36,6 +37,7 @@ import {
   recordRecentSource,
   saveModel,
   savePlaybackSession,
+  updateTrackLoudnessGain,
 } from "@/lib/db";
 
 const SESSION_SAVE_THROTTLE_MS = 5000;
@@ -43,6 +45,7 @@ const CROSSFADE_ENABLED_KEY = "drive-music-crossfade-enabled";
 const CROSSFADE_SECONDS_KEY = "drive-music-crossfade-seconds";
 export const MAX_CROSSFADE_SECONDS = 12;
 const DEFAULT_CROSSFADE_SECONDS = 5;
+const VOLUME_NORMALIZATION_ENABLED_KEY = "drive-music-volume-normalization-enabled";
 
 export type LoopMode = "off" | "all" | "one";
 type AudioSlot = "A" | "B";
@@ -83,6 +86,10 @@ interface PlayerContextValue {
   crossfadeSeconds: number;
   setCrossfadeEnabled: (value: boolean) => void;
   setCrossfadeSeconds: (value: number) => void;
+  /** Whether playback volume is attenuated per-track to even out loudness — see
+   * src/lib/loudness.ts. Only ever turns loud tracks down; never boosts quiet ones. */
+  volumeNormalizationEnabled: boolean;
+  setVolumeNormalizationEnabled: (value: boolean) => void;
   play: (queue: DriveFile[], index: number, source?: PlaySource) => void;
   addToQueue: (file: DriveFile) => void;
   removeFromQueue: (index: number) => void;
@@ -93,6 +100,10 @@ interface PlayerContextValue {
   changeVolume: (value: number) => void;
   removeFromCache: (fileId: string) => Promise<void>;
   downloadAll: (files: DriveFile[]) => Promise<void>;
+  /** Progress of an in-progress analyzeAllLoudness() run — null when none is running. */
+  analyzeProgress: DownloadProgress | null;
+  /** Runs loudness analysis over every downloaded track that hasn't been analyzed yet. */
+  analyzeAllLoudness: () => Promise<void>;
   toggleShuffle: () => void;
   cycleLoopMode: () => void;
   expand: () => void;
@@ -248,7 +259,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     durationMs: number;
     targetIndex: number;
     targetFile: DriveFile;
-    targetVolume: number;
+    // Each element ramps toward/from its own gain-adjusted volume — outgoing and incoming
+    // tracks can have different normalization gains, so a single shared target wouldn't work.
+    outgoingStartVolume: number;
+    incomingTargetVolume: number;
     incoming: HTMLAudioElement;
     outgoing: HTMLAudioElement;
   } | null>(null);
@@ -277,6 +291,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
+  const [analyzeProgress, setAnalyzeProgress] =
+    useState<DownloadProgress | null>(null);
   const [shuffle, setShuffle] = useState(false);
   const [loopMode, setLoopMode] = useState<LoopMode>("off");
   const [isExpanded, setIsExpanded] = useState(false);
@@ -291,6 +307,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [crossfadeSeconds, setCrossfadeSecondsState] = useState(
     DEFAULT_CROSSFADE_SECONDS,
   );
+  const [volumeNormalizationEnabled, setVolumeNormalizationEnabledState] = useState(true);
 
   useEffect(() => {
     const storedEnabled = localStorage.getItem(CROSSFADE_ENABLED_KEY);
@@ -299,6 +316,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const storedSeconds = Number(localStorage.getItem(CROSSFADE_SECONDS_KEY));
     if (Number.isFinite(storedSeconds) && storedSeconds > 0) {
       setCrossfadeSecondsState(Math.min(MAX_CROSSFADE_SECONDS, storedSeconds));
+    }
+    const storedNormalization = localStorage.getItem(VOLUME_NORMALIZATION_ENABLED_KEY);
+    if (storedNormalization !== null) {
+      setVolumeNormalizationEnabledState(storedNormalization === "true");
     }
   }, []);
 
@@ -313,6 +334,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(CROSSFADE_SECONDS_KEY, String(clamped));
   }, []);
 
+  const setVolumeNormalizationEnabled = useCallback((value: boolean) => {
+    setVolumeNormalizationEnabledState(value);
+    localStorage.setItem(VOLUME_NORMALIZATION_ENABLED_KEY, String(value));
+  }, []);
+
   // Aborts an in-progress crossfade — restores the active element to full volume (abandoning
   // the fade-out) and resets the inactive one, so a manual skip/seek/pause mid-fade cuts
   // cleanly instead of leaving either element stuck at a partial volume.
@@ -321,7 +347,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!state) return;
     crossfadeStateRef.current = null;
     const active = getActiveAudio();
-    if (active) active.volume = volume;
+    if (active) {
+      // Inlined (rather than calling the `trackGain`/`currentFile` declared further down) so
+      // this can stay defined here, ahead of the many other callbacks that depend on it.
+      const activeFile = currentIndex !== null ? queue[currentIndex] : undefined;
+      const gain = volumeNormalizationEnabled
+        ? (activeFile ? (cachedTracks.get(activeFile.id)?.loudnessGain ?? 1) : 1)
+        : 1;
+      active.volume = volume * gain;
+    }
     const inactive = getInactiveAudio();
     if (inactive) {
       inactive.pause();
@@ -332,7 +366,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       URL.revokeObjectURL(fadeObjectUrlRef.current);
       fadeObjectUrlRef.current = null;
     }
-  }, [getActiveAudio, getInactiveAudio, volume]);
+  }, [getActiveAudio, getInactiveAudio, volume, currentIndex, queue, cachedTracks, volumeNormalizationEnabled]);
 
   const refreshCachedTracks = useCallback(async () => {
     const tracks = await listCachedTracks();
@@ -395,6 +429,37 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const currentFile =
     currentIndex !== null ? (queue[currentIndex] ?? null) : null;
+
+  // Effective playback gain for `fileId` — 1 (unchanged) when normalization is off or the
+  // track hasn't been analyzed yet.
+  const trackGain = useCallback(
+    (fileId: string) =>
+      volumeNormalizationEnabled ? (cachedTracks.get(fileId)?.loudnessGain ?? 1) : 1,
+    [volumeNormalizationEnabled, cachedTracks],
+  );
+
+  // Analyzes a newly-cached track's loudness in the background (once per track — a no-op if
+  // already analyzed) and persists the result, so every later play of it is gain-adjusted
+  // without re-decoding the file each time. If this happens to be the track currently
+  // playing, also reapplies its volume immediately instead of waiting for the next load.
+  const ensureLoudnessAnalyzed = useCallback(
+    (track: CachedTrack): Promise<void> => {
+      if (track.loudnessGain !== undefined) return Promise.resolve();
+      return analyzeLoudnessGain(track.blob)
+        .then(async (gain) => {
+          await updateTrackLoudnessGain(track.fileId, gain);
+          await refreshCachedTracks();
+          if (currentFile?.id === track.fileId) {
+            const audio = getActiveAudio();
+            if (audio) audio.volume = volume * (volumeNormalizationEnabled ? gain : 1);
+          }
+        })
+        .catch((err) => {
+          console.error(`Loudness analysis failed for ${track.fileId}`, err);
+        });
+    },
+    [refreshCachedTracks, currentFile, volume, volumeNormalizationEnabled, getActiveAudio],
+  );
 
   // Loads (from cache, or downloads + caches + parses) and plays whenever the current file changes.
   useEffect(() => {
@@ -484,6 +549,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         // Only mark this file as "loaded" once it has actually succeeded — a failure (e.g. no
         // access token yet) must NOT set this, so a retry once the token resolves still runs.
         lastLoadedFileIdRef.current = file.id;
+        // Fire-and-forget: doesn't block playback starting, applies to future loads (and this
+        // one live, once it resolves) once analysis finishes.
+        void ensureLoudnessAnalyzed(track);
 
         if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
         const url = URL.createObjectURL(track.blob);
@@ -496,7 +564,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const audio = getActiveAudio();
         if (audio) {
           audio.src = url;
-          audio.volume = volume;
+          audio.volume = volume * (volumeNormalizationEnabled ? (track.loudnessGain ?? 1) : 1);
           if (restore) {
             // Restoring the last session — resume position, but don't auto-play (browsers
             // block unprompted audio anyway, and it'd be surprising on a plain page load).
@@ -917,8 +985,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const state = crossfadeStateRef.current;
     if (!state) return;
     const t = Math.min(1, (performance.now() - state.startTime) / state.durationMs);
-    state.incoming.volume = state.targetVolume * t;
-    state.outgoing.volume = state.targetVolume * (1 - t);
+    state.incoming.volume = state.incomingTargetVolume * t;
+    state.outgoing.volume = state.outgoingStartVolume * (1 - t);
     if (t >= 1) {
       crossfadeStateRef.current = null;
       crossfadeCommittedForRef.current = state.targetFile.id;
@@ -958,7 +1026,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         durationMs,
         targetIndex,
         targetFile,
-        targetVolume: volume,
+        // `outgoing.volume` at this instant already reflects its own gain (set when it
+        // started playing) — ramping proportionally down from there, not from `volume`
+        // directly, keeps that gain intact through the fade-out.
+        outgoingStartVolume: outgoing.volume,
+        incomingTargetVolume: volume * trackGain(targetFile.id),
         incoming,
         outgoing,
       };
@@ -970,7 +1042,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       };
       requestAnimationFrame(tick);
     },
-    [queue, cachedTracks, getInactiveAudio, volume, crossfadeSeconds, advanceCrossfadeRamp],
+    [queue, cachedTracks, getInactiveAudio, volume, crossfadeSeconds, advanceCrossfadeRamp, trackGain],
   );
 
   const seek = useCallback(
@@ -988,9 +1060,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (value: number) => {
       setVolumeState(value);
       const audio = getActiveAudio();
-      if (audio) audio.volume = value;
+      if (audio && currentFile) audio.volume = value * trackGain(currentFile.id);
     },
-    [getActiveAudio],
+    [getActiveAudio, currentFile, trackGain],
   );
 
   const removeFromCache = useCallback(
@@ -1009,8 +1081,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setDownloadProgress({ done: 0, total: targets.length });
       for (let i = 0; i < targets.length; i++) {
         try {
-          await ensureCached(targets[i], session?.accessToken);
+          const track = await ensureCached(targets[i], session?.accessToken);
           await refreshCachedTracks();
+          // Awaited (one at a time) here rather than fire-and-forget like the single-track
+          // load path — bulk-downloading a large playlist shouldn't spawn dozens of
+          // concurrent AudioContexts decoding audio at once.
+          await ensureLoudnessAnalyzed(track);
         } catch (err) {
           console.error(`Failed to download ${targets[i].name}`, err);
         }
@@ -1018,8 +1094,43 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
       setDownloadProgress(null);
     },
-    [cachedTracks, session, refreshCachedTracks],
+    [cachedTracks, session, refreshCachedTracks, ensureLoudnessAnalyzed],
   );
+
+  // Loudness analysis normally happens opportunistically (whenever a track gets played or
+  // bulk-downloaded) — this runs it over every already-downloaded track that hasn't been
+  // analyzed yet, e.g. a library downloaded before volume normalization existed, with a
+  // visible progress count instead of it happening silently one track at a time.
+  const analyzeAllLoudness = useCallback(async () => {
+    const targets = Array.from(cachedTracks.values()).filter(
+      (t) => t.loudnessGain === undefined,
+    );
+    if (targets.length === 0) return;
+
+    setAnalyzeProgress({ done: 0, total: targets.length });
+    for (let i = 0; i < targets.length; i++) {
+      await ensureLoudnessAnalyzed(targets[i]);
+      setAnalyzeProgress({ done: i + 1, total: targets.length });
+    }
+    setAnalyzeProgress(null);
+  }, [cachedTracks, ensureLoudnessAnalyzed]);
+
+  // Catches up a library downloaded before volume normalization existed (or before it was
+  // last turned on) — runs once per session, the first time cached tracks include something
+  // unanalyzed. New downloads/plays after that are already covered opportunistically (see
+  // ensureLoudnessAnalyzed's call sites), so this only ever needs to fire once.
+  const autoAnalyzeStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoAnalyzeStartedRef.current) return;
+    if (!volumeNormalizationEnabled || cachedTracks.size === 0) return;
+    const hasUnanalyzed = Array.from(cachedTracks.values()).some(
+      (t) => t.loudnessGain === undefined,
+    );
+    if (!hasUnanalyzed) return;
+    autoAnalyzeStartedRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: kicks off a background catch-up scan, guarded by the ref above so it only ever fires once
+    void analyzeAllLoudness();
+  }, [cachedTracks, volumeNormalizationEnabled, analyzeAllLoudness]);
 
   const toggleShuffle = useCallback(() => {
     cancelCrossfade();
@@ -1164,6 +1275,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       crossfadeSeconds,
       setCrossfadeEnabled,
       setCrossfadeSeconds,
+      volumeNormalizationEnabled,
+      setVolumeNormalizationEnabled,
       play,
       addToQueue,
       removeFromQueue,
@@ -1174,6 +1287,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       changeVolume,
       removeFromCache,
       downloadAll,
+      analyzeProgress,
+      analyzeAllLoudness,
       toggleShuffle,
       cycleLoopMode,
       expand,
@@ -1204,6 +1319,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       crossfadeSeconds,
       setCrossfadeEnabled,
       setCrossfadeSeconds,
+      volumeNormalizationEnabled,
+      setVolumeNormalizationEnabled,
       play,
       addToQueue,
       removeFromQueue,
@@ -1214,6 +1331,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       changeVolume,
       removeFromCache,
       downloadAll,
+      analyzeProgress,
+      analyzeAllLoudness,
       toggleShuffle,
       cycleLoopMode,
       expand,

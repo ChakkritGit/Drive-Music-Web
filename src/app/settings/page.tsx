@@ -27,8 +27,14 @@ export default function SettingsPage() {
 }
 
 function SettingsView() {
-  const { crossfadeEnabled, crossfadeSeconds, setCrossfadeEnabled, setCrossfadeSeconds } =
-    usePlayer();
+  const {
+    crossfadeEnabled,
+    crossfadeSeconds,
+    setCrossfadeEnabled,
+    setCrossfadeSeconds,
+    volumeNormalizationEnabled,
+    setVolumeNormalizationEnabled,
+  } = usePlayer();
   const [showConfirmClear, setShowConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
 
@@ -115,6 +121,42 @@ function SettingsView() {
             Only kicks in between tracks that are already downloaded — an automatic transition
             to a track that still needs to download plays normally instead of cutting the fade
             short.
+          </p>
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                Volume normalization
+              </h2>
+              <p className="mt-1 text-xs text-zinc-400">
+                Turn louder tracks down to roughly match quieter ones, so nothing suddenly
+                blasts after a quiet song. Only ever turns loud tracks down — never boosts a
+                quiet one up.
+              </p>
+            </div>
+            <button
+              role="switch"
+              aria-checked={volumeNormalizationEnabled}
+              onClick={() => setVolumeNormalizationEnabled(!volumeNormalizationEnabled)}
+              className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
+                volumeNormalizationEnabled
+                  ? "bg-emerald-500 ring-emerald-500"
+                  : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  volumeNormalizationEnabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+          <p className="mt-4 text-[11px] text-zinc-400">
+            Each track is analyzed once in the background the first time it&apos;s downloaded
+            (or played), then remembered — no delay on tracks you&apos;ve already listened to
+            before.
           </p>
         </section>
 

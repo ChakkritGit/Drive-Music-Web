@@ -115,7 +115,7 @@ export function FullPlayer() {
       )}
     >
       <div
-        className="pointer-events-none absolute -inset-20 animate-[breathe_6s_ease-in-out_infinite] blur-[100px]"
+        className="pointer-events-none absolute -inset-20 animate-[breathe_11s_ease-in-out_infinite] blur-[100px]"
         style={{
           backgroundColor: glowColor,
           transition: "background-color 700ms ease-out",
@@ -162,6 +162,9 @@ export function FullPlayer() {
             // would just redraw a crisp rectangular silhouette around it, so there isn't one
             // here; CSS mask-image would be the "correct" tool but didn't render reliably.
             boxShadow: `inset 0 0 56px 14px ${glowColor}`,
+            // Without this, the shadow color snaps instantly whenever glowColor updates —
+            // right on the sharp edge of the artwork, where a hard cut reads as a flash.
+            transition: "box-shadow 700ms ease-out",
           }}
         >
           {currentMeta?.pictureDataUrl ? (
