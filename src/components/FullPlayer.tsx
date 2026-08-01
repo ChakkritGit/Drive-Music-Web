@@ -155,34 +155,25 @@ export function FullPlayer() {
       <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
         <div
           key={currentFile?.id ?? "none"}
-          className="h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] rounded-2xl shadow-xl sm:h-80 sm:w-80"
+          className="flex h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 sm:h-80 sm:w-80 dark:bg-zinc-800"
+          style={{
+            // An inset vignette in the same color as the blurred glow behind the page (see
+            // `glowColor` above) fades the artwork's edges toward it — a hard drop shadow
+            // would just redraw a crisp rectangular silhouette around it, so there isn't one
+            // here; CSS mask-image would be the "correct" tool but didn't render reliably.
+            boxShadow: `inset 0 0 56px 14px ${glowColor}`,
+          }}
         >
-          {/* Masked separately from the shadow-casting wrapper above, so the soft edge fades
-              the artwork into the ambient glow behind it without also eating the shadow. */}
-          <div
-            className="flex h-full w-full items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 dark:bg-zinc-800"
-            style={{
-              WebkitMaskImage: "radial-gradient(ellipse at center, #000 45%, transparent 100%)",
-              maskImage: "radial-gradient(ellipse at center, #000 45%, transparent 100%)",
-              WebkitMaskSize: "100% 100%",
-              maskSize: "100% 100%",
-              WebkitMaskRepeat: "no-repeat",
-              maskRepeat: "no-repeat",
-              WebkitMaskPosition: "center",
-              maskPosition: "center",
-            }}
-          >
-            {currentMeta?.pictureDataUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={currentMeta.pictureDataUrl}
-                alt=""
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <Music className="h-16 w-16 text-zinc-400" />
-            )}
-          </div>
+          {currentMeta?.pictureDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={currentMeta.pictureDataUrl}
+              alt=""
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <Music className="h-16 w-16 text-zinc-400" />
+          )}
         </div>
 
         <div className="flex w-full max-w-sm items-center gap-3">
