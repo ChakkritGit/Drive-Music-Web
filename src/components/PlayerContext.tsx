@@ -1084,6 +1084,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const audio = getActiveAudio();
       if (!audio) return;
       setIsPlaying((current) => (current === audio.paused ? !audio.paused : current));
+      // iOS Safari suspends the shared AudioContext while the app is backgrounded — since
+      // every audio element's output is routed exclusively through it (see ensureAudioGraph),
+      // a suspended context silences playback even though `audio.paused` never changes.
+      // Resume it here so audio that was genuinely still meant to be playing is actually
+      // audible again, instead of depending on iOS's own (inconsistent) auto-resume.
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended" && !audio.paused) void ctx.resume();
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -1370,6 +1377,50 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [getActiveAudio, cancelCrossfade],
   );
 
+  // Registers lock-screen/notification playback controls — the standard way to tell iOS/Android
+  // this is legitimate background media playback rather than page audio they're free to
+  // interrupt/silence when the app is backgrounded (see the AudioContext-resume logic in the
+  // visibilitychange effect above for the other half of that fix).
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    navigator.mediaSession.setActionHandler("play", () => togglePlay());
+    navigator.mediaSession.setActionHandler("pause", () => togglePlay());
+    navigator.mediaSession.setActionHandler("previoustrack", () => prev());
+    navigator.mediaSession.setActionHandler("nexttrack", () => next());
+    navigator.mediaSession.setActionHandler("seekto", (details) => {
+      if (typeof details.seekTime === "number") seek(details.seekTime);
+    });
+    return () => {
+      navigator.mediaSession.setActionHandler("play", null);
+      navigator.mediaSession.setActionHandler("pause", null);
+      navigator.mediaSession.setActionHandler("previoustrack", null);
+      navigator.mediaSession.setActionHandler("nexttrack", null);
+      navigator.mediaSession.setActionHandler("seekto", null);
+    };
+  }, [togglePlay, prev, next, seek]);
+
+  // Keeps the lock-screen/notification metadata (title/artist/artwork) in sync with the
+  // current track.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    if (!currentFile) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentMeta?.title || currentFile.name,
+      artist: currentMeta?.artist || "",
+      album: currentMeta?.album || "",
+      artwork: currentMeta?.pictureDataUrl ? [{ src: currentMeta.pictureDataUrl }] : [],
+    });
+  }, [currentFile, currentMeta]);
+
+  // Keeps the lock-screen/notification play/pause indicator in sync with actual playback state.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+  }, [isPlaying]);
+
   const changeVolume = useCallback(
     (value: number) => {
       setVolumeState(value);
@@ -1469,6 +1520,39 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // A track queued via "play next" always shows first, regardless of shuffle — the rest of
   // the list follows the actual shuffled order (or plain queue order) after it, skipping that
   // entry so it doesn't also appear a second time further down.
+  // Keeps `shuffleOrder` valid (containing `currentIndex`, with enough tracks queued ahead)
+  // as soon as it goes stale, instead of leaving that to whichever consumer happens to read it
+  // next. `resolveShuffleOrder` reseeds on demand but doesn't persist its result, so without
+  // this, `upNext`'s preview, a crossfade's early peek (`peekNextIndex`), and the actual advance
+  // (`advanceShuffle`) could each independently reseed their own random window and disagree
+  // with each other — "Up Next" showing one track, then a completely different one actually
+  // playing. `addToQueue`/`removeFromQueue` deliberately reset this to `[]` to regenerate fresh
+  // rather than remap stale positions; this effect is what actually regenerates it, immediately,
+  // so every consumer reads the same persisted order instead of racing separate reseeds. It also
+  // tops the window back up after a crossfade commit, which changes `currentIndex` without ever
+  // calling `advanceShuffle`/`growShuffleWindow` itself.
+  useEffect(() => {
+    if (!shuffle || currentIndex === null || queue.length === 0) return;
+    const weights = computeWeightsFor(queue);
+    if (!shuffleOrder.includes(currentIndex)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reseeding involves Math.random(), so it can't be plain derived-during-render state, and it must be persisted here (not left to whichever consumer reads it next) so every consumer agrees on the same order
+      setShuffleOrder(seedShuffleWindow(queue.length, currentIndex, weights));
+      return;
+    }
+    const position = shuffleOrder.indexOf(currentIndex);
+    const remainingAhead = shuffleOrder.length - (position + 1);
+    if (remainingAhead < SHUFFLE_WINDOW - 1) {
+      const grown = growShuffleWindow(
+        shuffleOrder,
+        queue.length,
+        weights,
+        loopMode === "off",
+        currentIndex,
+      );
+      if (grown.length !== shuffleOrder.length) setShuffleOrder(grown);
+    }
+  }, [shuffle, currentIndex, queue, shuffleOrder, computeWeightsFor, loopMode]);
+
   const upNext = useMemo<{ file: DriveFile; index: number }[]>(() => {
     if (currentIndex === null || queue.length === 0) return [];
     const result: { file: DriveFile; index: number }[] = [];

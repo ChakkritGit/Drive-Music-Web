@@ -11,6 +11,7 @@ import {
   Library as LibraryIcon,
   ListMusic,
   LogOut,
+  Music,
   Settings,
 } from "lucide-react";
 import clsx from "clsx";
@@ -73,11 +74,34 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   // While the session is resolving (including the initial server-rendered HTML, which always
-  // starts "loading" since useSession() fetches client-side), show the same content as
-  // signed-out — not a bare "Loading…" — so the very first paint of the home page always
-  // carries the app's name and purpose. A crawler (or a real visitor) that never waits past
-  // this first render still sees a real page instead of a placeholder.
-  if (status === "loading" || !session) {
+  // starts "loading" since useSession() fetches client-side), this still needs to carry the
+  // app's name and purpose — a bare "Loading…" is what a crawler (or anyone who never waits
+  // past the first paint) would see instead of a real page. But it's shown to *every* visitor
+  // on *every* load, including already-signed-in ones — so unlike the signed-out case, it
+  // can't look like a "Sign in with Google" prompt, or it'd flash a misleading CTA at people
+  // who are already signed in.
+  if (status === "loading") {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900 dark:bg-zinc-100">
+          <Music className="h-6 w-6 text-white dark:text-zinc-900" />
+        </div>
+        <div>
+          <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
+          <p className="mt-2 max-w-xs text-sm text-zinc-500 dark:text-zinc-400">
+            A personal audio player for the music files in your Google Drive.
+          </p>
+        </div>
+        <div
+          className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-zinc-100"
+          role="status"
+          aria-label="Loading"
+        />
+      </div>
+    );
+  }
+
+  if (!session) {
     return <SignInScreen />;
   }
 

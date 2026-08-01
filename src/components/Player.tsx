@@ -29,6 +29,10 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// Routes inside the (app) route group (see app/(app)/layout.tsx's NAV_ITEMS) — the only ones
+// that render the mobile bottom tab nav.
+const APP_GROUP_ROUTES = ["/", "/browse", "/playlists", "/library"];
+
 export function Player() {
   const {
     queue,
@@ -64,12 +68,21 @@ export function Player() {
   // first local play, since a device almost always has *some* track loaded after that.
   const remoteTrack = !isPlaying ? remoteNowPlaying : null;
   const remoteFile = remoteTrack?.queue[remoteTrack.currentIndex];
-  // The mobile bottom tab nav (see app/(app)/layout.tsx) renders for every route in that group
-  // (home/browse/playlists/library) once signed in — /admin is the only route outside it.
+  // The mobile bottom tab nav (see app/(app)/layout.tsx) renders only for routes inside that
+  // route group (home/browse/playlists/library) once signed in — /admin, /settings, /privacy,
+  // /terms, and any other standalone route are all outside it and never get one. Checked as an
+  // inclusion list (which routes DO have it) rather than an exclusion list (which routes don't)
+  // — an exclusion list silently breaks for every new standalone page (this is exactly how
+  // /settings ended up reserving space for a bottom nav that was never actually there, leaving
+  // the bar floating above the real bottom edge instead of sitting flush against it).
   // Everywhere the nav is absent, this bar is the bottommost fixed element, so it alone is
   // responsible for clearing the gesture area there; when the nav is present, this bar instead
   // sits just above it, which already clears it.
-  const hasBottomNav = pathname !== "/admin" && status === "authenticated";
+  const hasBottomNav =
+    status === "authenticated" &&
+    APP_GROUP_ROUTES.some(
+      (route) => pathname === route || pathname.startsWith(`${route}/`),
+    );
   const [showUpNext, setShowUpNext] = useState(false);
 
   return (
