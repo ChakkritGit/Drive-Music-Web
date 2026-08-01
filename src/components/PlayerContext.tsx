@@ -396,6 +396,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
         const promoted = getActiveAudio();
         if (promoted?.paused) void tryPlay(promoted);
+        if (promoted) {
+          // The promoted element's `loadedmetadata` fired back while it was still the
+          // inactive fade-in element, so handleLoadedMetadata's active-only guard dropped it
+          // — duration would otherwise be stuck at the outgoing track's length, making the
+          // seek bar's max wrong and the thumb stop short of (or overshoot) the real end.
+          setDuration(Number.isFinite(promoted.duration) ? promoted.duration : 0);
+          progressRef.current = promoted.currentTime;
+          setProgress(promoted.currentTime);
+        }
 
         lastLoadedFileIdRef.current = file.id;
         setCurrentMeta(cachedTracks.get(file.id)?.parsedMeta ?? null);
@@ -624,6 +633,31 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       audio.pause();
     }
   }, [getActiveAudio, cancelCrossfade]);
+
+  // Spacebar toggles play/pause anywhere in the app — except while the user is actually
+  // typing/focused on an interactive element, where Space needs to keep doing its normal job
+  // (insert a space, activate a focused button, ...) instead of being hijacked.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isInteractiveTarget =
+        target?.isContentEditable ||
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        tag === "BUTTON" ||
+        tag === "A";
+      if (isInteractiveTarget || !currentFile) return;
+
+      e.preventDefault(); // stop the page from scrolling on Space
+      if (e.repeat) return; // held down — keep suppressing scroll, but don't toggle repeatedly
+      togglePlay();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentFile, togglePlay]);
 
   // Returns [order, positionOfPinned], regenerating the order only when it's stale
   // (queue size changed, or `pinned` isn't in it) — a cheap no-op otherwise.
