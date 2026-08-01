@@ -162,9 +162,14 @@ export function FullPlayer() {
           <div
             className="flex h-full w-full items-center justify-center overflow-hidden rounded-2xl bg-zinc-100 dark:bg-zinc-800"
             style={{
-              maskImage: "radial-gradient(ellipse at center, black 58%, transparent 100%)",
-              WebkitMaskImage:
-                "radial-gradient(ellipse at center, black 58%, transparent 100%)",
+              WebkitMaskImage: "radial-gradient(ellipse at center, #000 45%, transparent 100%)",
+              maskImage: "radial-gradient(ellipse at center, #000 45%, transparent 100%)",
+              WebkitMaskSize: "100% 100%",
+              maskSize: "100% 100%",
+              WebkitMaskRepeat: "no-repeat",
+              maskRepeat: "no-repeat",
+              WebkitMaskPosition: "center",
+              maskPosition: "center",
             }}
           >
             {currentMeta?.pictureDataUrl ? (

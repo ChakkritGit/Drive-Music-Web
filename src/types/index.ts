@@ -88,6 +88,9 @@ export interface PlaybackSession {
   source: PlaySource | null;
   progress: number;
   shuffle: boolean;
+  /** The live shuffle window (see seedShuffleWindow/growShuffleWindow in PlayerContext) —
+   * persisted so a refresh doesn't re-roll a fresh random order for the same session. */
+  shuffleOrder: number[];
   loopMode: "off" | "all" | "one";
   volume: number;
 }

@@ -382,6 +382,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setCurrentIndex(session.currentIndex);
       setCurrentSource(session.source);
       setShuffle(session.shuffle);
+      // Falls back to [] for a session saved before this field existed — same as today's
+      // behavior (reseeds fresh on first use), just not yet fixed for that one old session.
+      setShuffleOrder(session.shuffleOrder ?? []);
       setLoopMode(session.loopMode);
       setVolumeState(session.volume);
     });
@@ -559,11 +562,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         source: currentSource,
         progress: currentProgress,
         shuffle,
+        shuffleOrder,
         loopMode,
         volume,
       });
     },
-    [queue, currentIndex, currentSource, shuffle, loopMode, volume],
+    [queue, currentIndex, currentSource, shuffle, shuffleOrder, loopMode, volume],
   );
 
   // Persists whenever the queue/track/source/shuffle/loop/volume changes — these change
