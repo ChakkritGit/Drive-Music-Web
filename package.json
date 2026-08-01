@@ -12,6 +12,7 @@
     "party:deploy": "if [ -f .env.cloudflare ]; then set -a; . ./.env.cloudflare; set +a; fi; wrangler deploy"
   },
   "dependencies": {
+    "@vercel/speed-insights": "^2.0.0",
     "clsx": "^2.1.1",
     "idb": "^8.0.3",
     "jose": "^6.2.4",
