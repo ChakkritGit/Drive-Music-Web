@@ -191,7 +191,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // The blob URL currently loaded into the *inactive* element while it fades in — promoted to
   // objectUrlRef (and the old objectUrlRef revoked) once the crossfade commits.
   const fadeObjectUrlRef = useRef<string | null>(null);
-  const crossfadeStateRef = useRef<{ raf: number } | null>(null);
+  const crossfadeStateRef = useRef<{
+    startTime: number;
+    durationMs: number;
+    targetIndex: number;
+    targetFile: DriveFile;
+    targetVolume: number;
+    incoming: HTMLAudioElement;
+    outgoing: HTMLAudioElement;
+  } | null>(null);
   // Set right before setCurrentIndex() at the end of a crossfade, so the load effect can tell
   // "this transition was already faded in on the other element" apart from a normal load.
   const crossfadeCommittedForRef = useRef<string | null>(null);
@@ -259,7 +267,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const cancelCrossfade = useCallback(() => {
     const state = crossfadeStateRef.current;
     if (!state) return;
-    cancelAnimationFrame(state.raf);
     crossfadeStateRef.current = null;
     const active = getActiveAudio();
     if (active) active.volume = volume;
@@ -834,6 +841,28 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return (currentIndex + 1) % queue.length;
   }, [queue, currentIndex, loopMode, playNextIndex, shuffle, resolveShuffleOrder]);
 
+  // Applies the crossfade ramp's volume for "right now" (a pure function of wall-clock
+  // elapsed time, not an incremental step), and commits the transition once it completes.
+  // Called from both a requestAnimationFrame loop (smooth while the tab is foregrounded) and
+  // every `timeupdate` (see handleTimeUpdate) — rAF gets throttled or fully suspended in a
+  // backgrounded tab, which would otherwise freeze the fade indefinitely (or strand the
+  // incoming track at a partial volume) the moment the user switches tabs. `timeupdate` fires
+  // off actual audio playback instead, so it keeps the ramp correct regardless of tab
+  // visibility; calling this twice for the same moment is harmless since it's idempotent.
+  const advanceCrossfadeRamp = useCallback(() => {
+    const state = crossfadeStateRef.current;
+    if (!state) return;
+    const t = Math.min(1, (performance.now() - state.startTime) / state.durationMs);
+    state.incoming.volume = state.targetVolume * t;
+    state.outgoing.volume = state.targetVolume * (1 - t);
+    if (t >= 1) {
+      crossfadeStateRef.current = null;
+      crossfadeCommittedForRef.current = state.targetFile.id;
+      if (playNextIndex === state.targetIndex) setPlayNextIndex(null);
+      setCurrentIndex(state.targetIndex);
+    }
+  }, [playNextIndex]);
+
   // Starts fading `outgoing` out while the (already cached) next track fades in on the other
   // element. Only ever called with a target whose blob is already in memory — an uncached
   // next track just falls through to the normal onEnded-driven load, no crossfade attempted.
@@ -852,7 +881,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       incoming.volume = 0;
       void tryPlay(incoming);
 
-      const targetVolume = volume;
       // Never let the ramp outlast the outgoing track — `timeupdate` doesn't tick every
       // frame, so by the time this fires the real time left can already be a bit under
       // `crossfadeSeconds`. A ramp that runs past the track's natural end means the browser's
@@ -860,24 +888,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // handlePause) would otherwise be misread as the user pausing and cancel the fade.
       const remaining = outgoing.duration - outgoing.currentTime;
       const durationMs = Math.max(0.01, Math.min(crossfadeSeconds, remaining)) * 1000;
-      const startTime = performance.now();
 
-      const tick = (now: number) => {
-        const t = Math.min(1, (now - startTime) / durationMs);
-        incoming.volume = targetVolume * t;
-        outgoing.volume = targetVolume * (1 - t);
-        if (t < 1) {
-          crossfadeStateRef.current = { raf: requestAnimationFrame(tick) };
-        } else {
-          crossfadeStateRef.current = null;
-          crossfadeCommittedForRef.current = targetFile.id;
-          if (playNextIndex === targetIndex) setPlayNextIndex(null);
-          setCurrentIndex(targetIndex);
-        }
+      crossfadeStateRef.current = {
+        startTime: performance.now(),
+        durationMs,
+        targetIndex,
+        targetFile,
+        targetVolume: volume,
+        incoming,
+        outgoing,
       };
-      crossfadeStateRef.current = { raf: requestAnimationFrame(tick) };
+
+      const tick = () => {
+        if (!crossfadeStateRef.current) return; // committed or cancelled elsewhere
+        advanceCrossfadeRamp();
+        if (crossfadeStateRef.current) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     },
-    [queue, cachedTracks, getInactiveAudio, volume, crossfadeSeconds, playNextIndex],
+    [queue, cachedTracks, getInactiveAudio, volume, crossfadeSeconds, advanceCrossfadeRamp],
   );
 
   const seek = useCallback(
@@ -981,6 +1010,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const handleTimeUpdate = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       const el = e.currentTarget;
+      // Runs for both elements (including the inactive one mid-fade-in) — see
+      // advanceCrossfadeRamp's own comment for why this can't rely on rAF alone.
+      advanceCrossfadeRamp();
       if (el !== getActiveAudio()) return;
       const t = el.currentTime;
       progressRef.current = t;
@@ -1000,7 +1032,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (target === null) return;
       startCrossfade(target, el);
     },
-    [getActiveAudio, persistSession, crossfadeEnabled, crossfadeSeconds, peekNextIndex, startCrossfade],
+    [
+      getActiveAudio,
+      persistSession,
+      crossfadeEnabled,
+      crossfadeSeconds,
+      peekNextIndex,
+      startCrossfade,
+      advanceCrossfadeRamp,
+    ],
   );
 
   const handleLoadedMetadata = useCallback(
