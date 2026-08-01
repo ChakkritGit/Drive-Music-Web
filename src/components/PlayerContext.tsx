@@ -760,34 +760,51 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [resolveShuffleOrder, computeWeightsFor, queue, loopMode],
   );
 
+  // next()/prev() read `currentIndex` directly (not via setCurrentIndex's functional-updater
+  // form) specifically so advanceShuffle/resolveShuffleOrder's setShuffleOrder call happens as
+  // a plain top-level state update, never nested inside another setter's updater function.
+  // React is allowed to re-invoke an updater function (Strict Mode does this on purpose, to
+  // surface exactly this kind of bug) — a nested, randomness-driven setShuffleOrder call would
+  // then fire twice with two different random picks, leaving currentIndex and shuffleOrder
+  // referencing two different draws. That mismatch is invisible with a full-permutation
+  // shuffle (every permutation contains every index), but with the rolling window it means
+  // resolveShuffleOrder sees "current index isn't in the window" and reseeds a whole fresh
+  // window from scratch — i.e. shuffle appearing to "re-shuffle everything" on every advance.
   const next = useCallback(() => {
     cancelCrossfade();
-    setCurrentIndex((idx) => {
-      if (queue.length === 0) return idx;
-      if (idx === null) return 0;
-      if (playNextIndex !== null) {
-        const target = playNextIndex;
-        setPlayNextIndex(null);
-        return target;
-      }
-      if (!shuffle) return (idx + 1) % queue.length;
-      const advanced = advanceShuffle(idx);
-      return advanced === null ? idx : advanced; // nothing left (loop off) — stay put
-    });
-  }, [queue, shuffle, advanceShuffle, playNextIndex, cancelCrossfade]);
+    if (queue.length === 0) return;
+    if (currentIndex === null) {
+      setCurrentIndex(0);
+      return;
+    }
+    if (playNextIndex !== null) {
+      setPlayNextIndex(null);
+      setCurrentIndex(playNextIndex);
+      return;
+    }
+    if (!shuffle) {
+      setCurrentIndex((currentIndex + 1) % queue.length);
+      return;
+    }
+    const advanced = advanceShuffle(currentIndex);
+    if (advanced !== null) setCurrentIndex(advanced); // null (loop off, exhausted) — stay put
+  }, [queue, currentIndex, shuffle, advanceShuffle, playNextIndex, cancelCrossfade]);
 
   const prev = useCallback(() => {
     cancelCrossfade();
-    setCurrentIndex((idx) => {
-      if (queue.length === 0) return idx;
-      if (idx === null) return 0;
-      if (!shuffle) return (idx - 1 + queue.length) % queue.length;
-
-      const { order, position } = resolveShuffleOrder(idx);
-      setShuffleOrder(order);
-      return order[Math.max(0, position - 1)];
-    });
-  }, [queue.length, shuffle, resolveShuffleOrder, cancelCrossfade]);
+    if (queue.length === 0) return;
+    if (currentIndex === null) {
+      setCurrentIndex(0);
+      return;
+    }
+    if (!shuffle) {
+      setCurrentIndex((currentIndex - 1 + queue.length) % queue.length);
+      return;
+    }
+    const { order, position } = resolveShuffleOrder(currentIndex);
+    setShuffleOrder(order);
+    setCurrentIndex(order[Math.max(0, position - 1)]);
+  }, [queue.length, currentIndex, shuffle, resolveShuffleOrder, cancelCrossfade]);
 
   const handleEnded = useCallback(() => {
     // A crossfade already committed this transition (setCurrentIndex was called as the ramp
@@ -838,11 +855,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (shuffle) {
-      setCurrentIndex((idx) => {
-        if (idx === null || queue.length === 0) return idx;
-        const advanced = advanceShuffle(idx);
-        return advanced === null ? idx : advanced; // nothing left (loop off) — stop instead of reshuffling
-      });
+      // Reads currentIndex directly rather than via setCurrentIndex's updater form — see the
+      // comment above next()/prev() for why nesting advanceShuffle's setShuffleOrder call
+      // inside another setter's updater is what caused shuffle to appear to reseed itself.
+      if (currentIndex !== null && queue.length > 0) {
+        const advanced = advanceShuffle(currentIndex);
+        if (advanced !== null) setCurrentIndex(advanced); // null (loop off, exhausted) — stop instead of reshuffling
+      }
       return;
     }
 
