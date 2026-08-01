@@ -22,6 +22,9 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
     title: "Drive Music",
   },
+  verification: {
+    google: "B5OIhoMKpXg4QcPM0FcVLJUQ6hqwnKxqzd_xARGQf9Q",
+  },
 };
 
 export const viewport: Viewport = {

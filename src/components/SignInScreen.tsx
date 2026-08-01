@@ -13,7 +13,13 @@ export function SignInScreen() {
         </div>
         <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          Sign in with Google to browse and play music from your Drive.
+          Drive Music is a personal audio player for the music files already sitting in your
+          Google Drive — browse your folders, play tracks, download them for offline listening,
+          and build playlists, all from your own Drive.
+        </p>
+        <p className="mt-3 text-xs text-zinc-400">
+          Sign in with Google to grant read-only access to your Drive — Drive Music never
+          edits, uploads, or deletes anything there.
         </p>
         <button
           onClick={() => signIn("google")}

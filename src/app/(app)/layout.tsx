@@ -72,15 +72,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     lastScrollTopRef.current = top;
   }
 
-  if (status === "loading") {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
-        Loading…
-      </div>
-    );
-  }
-
-  if (!session) {
+  // While the session is resolving (including the initial server-rendered HTML, which always
+  // starts "loading" since useSession() fetches client-side), show the same content as
+  // signed-out — not a bare "Loading…" — so the very first paint of the home page always
+  // carries the app's name and purpose. A crawler (or a real visitor) that never waits past
+  // this first render still sees a real page instead of a placeholder.
+  if (status === "loading" || !session) {
     return <SignInScreen />;
   }
 
