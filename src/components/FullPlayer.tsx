@@ -172,37 +172,9 @@ export function FullPlayer() {
         <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
           Now Playing
         </p>
-        <div className="flex items-center gap-1">
-          {syncAvailable && (
-          <button
-            onClick={toggleSynced}
-            className={clsx(
-              "rounded-full p-2 transition active:scale-90",
-              synced
-                ? "text-accent"
-                : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
-            )}
-            aria-label={synced ? "Stop listening together" : "Listen together"}
-            title={synced ? "Listening together" : "Listen together"}
-          >
-            <Users className="h-5 w-5" />
-          </button>
-          )}
-          {/* The queue used to be a permanently-expanded list at the bottom of this view,
-              pushing the transport controls off-screen on a phone whenever anything was
-              queued. It's a sheet now, opened from here. */}
-          <button
-            onClick={() => setShowQueue(true)}
-            className="relative rounded-full p-2 text-zinc-500 transition active:scale-90 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
-            aria-label="Show queue"
-            title="Up Next"
-          >
-            <ListMusic className="h-5 w-5" />
-            {upNext.length > 0 && (
-              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
-            )}
-          </button>
-        </div>
+        {/* Balances the collapse button on the left so "Now Playing" stays centred — the
+            actions that used to sit here now live under the transport controls. */}
+        <div className="w-9" />
       </div>
 
       <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
@@ -350,18 +322,51 @@ export function FullPlayer() {
           </button>
         </div>
 
+        {/* Secondary actions, one step down from the transport row: same visual weight as each
+            other, clearly below play/pause rather than tucked up in the header. */}
+        <div className="-mt-4 flex items-center gap-6">
+          {syncAvailable && (
+            <button
+              onClick={toggleSynced}
+              className={clsx(
+                "rounded-full p-2 transition active:scale-90",
+                synced
+                  ? "text-accent"
+                  : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
+              )}
+              aria-label={synced ? "Stop listening together" : "Listen together"}
+              title={synced ? "Listening together" : "Listen together"}
+            >
+              <Users className="h-5 w-5" />
+            </button>
+          )}
+          <button
+            onClick={() => setShowQueue(true)}
+            className="relative rounded-full p-2 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+            aria-label="Show queue"
+            title="Up Next"
+          >
+            <ListMusic className="h-5 w-5" />
+            {upNext.length > 0 && (
+              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
+            )}
+          </button>
+        </div>
+
       </div>
 
       {/* Sheet, not a separate portal: it belongs to this overlay, so it lives inside it and
           inherits its stacking context (and its aria-hidden while the player is collapsed). */}
       {showQueue && (
-        <div className="absolute inset-0 z-10 flex flex-col justify-end">
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-end">
           <button
             className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={() => setShowQueue(false)}
             aria-label="Close queue"
           />
-          <div className="relative flex max-h-[70%] flex-col animate-[slideUp_250ms_ease-out] rounded-t-3xl border-t border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-950">
+          {/* Capped and centred rather than edge-to-edge: on a wide window a full-width sheet
+              stretches one narrow list of tracks across the whole screen. */}
+          <div className="relative flex max-h-[70%] w-full max-w-md flex-col animate-[slideUp_250ms_ease-out] rounded-t-3xl border border-b-0 border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex items-center justify-between px-5 pb-2 pt-4">
               <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
                 Up Next
