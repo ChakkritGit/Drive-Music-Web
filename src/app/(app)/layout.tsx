@@ -16,6 +16,7 @@ import {
 import clsx from "clsx";
 import { SignInScreen } from "@/components/SignInScreen";
 import { AppLogo } from "@/components/AppLogo";
+import { PolicyLinks } from "@/components/PolicyLinks";
 
 const NAV_ITEMS: {
   href: string;
@@ -95,6 +96,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           role="status"
           aria-label="Loading"
         />
+        {/* This block *is* the server-rendered homepage — useSession() only resolves client-
+            side, so anything that reads the HTML without running JS (Google's OAuth branding
+            review among them) sees this and never the sign-in screen below. Google requires
+            the homepage to link its privacy policy and terms, so they have to live here too,
+            not only on the signed-out screen. */}
+        <PolicyLinks />
       </div>
     );
   }

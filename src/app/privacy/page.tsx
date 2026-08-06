@@ -7,7 +7,9 @@ export const metadata: Metadata = {
   description: "How Drive Music accesses, stores, and handles your data.",
 };
 
-const LAST_UPDATED = "August 1, 2026";
+const LAST_UPDATED = "August 6, 2026";
+const GOOGLE_USER_DATA_POLICY_URL =
+  "https://developers.google.com/terms/api-services-user-data-policy";
 const REPO_URL = "https://github.com/ChakkritGit/drive-music";
 const SUPPORT_URL = `${REPO_URL}/issues`;
 const GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/permissions";
@@ -59,6 +61,33 @@ export default function PrivacyPolicyPage() {
                 never requests access to files you haven&apos;t browsed to.
               </li>
             </ul>
+          </section>
+
+          {/* Required disclosure: `drive.readonly` is a restricted scope, so Google's OAuth
+              verification expects this policy to affirm the Limited Use requirements
+              explicitly (and to link the policy it's affirming). */}
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              Limited Use of Google user data
+            </h2>
+            <p>
+              Drive Music&apos;s use and transfer of information received from Google APIs
+              adheres to the{" "}
+              <a
+                href={GOOGLE_USER_DATA_POLICY_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-600 hover:underline dark:text-emerald-400"
+              >
+                Google API Services User Data Policy
+              </a>
+              , including the Limited Use requirements. Specifically, data obtained from your
+              Google account is used only to provide and improve the features described here —
+              never for advertising, never sold or transferred to others (except as needed to
+              provide the app, to comply with the law, or as part of a merger or acquisition),
+              and never read by humans, unless you explicitly ask for support, the law requires
+              it, or it is needed for security purposes.
+            </p>
           </section>
 
           <section className="space-y-2">
