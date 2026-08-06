@@ -200,8 +200,10 @@ export function FullPlayer() {
           )}
         </div>
 
-        <div className="flex w-full max-w-sm items-center gap-3">
-          <div className="min-w-0 flex-1 text-center">
+        <div className="flex w-full max-w-sm items-center justify-between gap-3">
+          {/* Left-aligned: centring the title made it drift as the text length changed, and it
+              read as unrelated to the favorite button sharing the row. */}
+          <div className="min-w-0 flex-1 text-left">
             <p className="truncate text-lg font-medium text-zinc-900 dark:text-zinc-50">
               {currentFile
                 ? currentMeta?.title || currentFile.name
@@ -222,7 +224,7 @@ export function FullPlayer() {
               </p>
             )}
             {synced && remoteNowPlaying && (
-              <p className="mt-0.5 flex items-center justify-center gap-1 truncate text-xs text-accent">
+              <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent">
                 <Users className="h-3 w-3" /> Synced with {remoteNowPlaying.deviceName}
               </p>
             )}
