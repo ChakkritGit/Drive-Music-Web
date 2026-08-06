@@ -29,6 +29,8 @@ export default function SettingsPage() {
 
 function SettingsView() {
   const {
+    gaplessEnabled,
+    setGaplessEnabled,
     crossfadeEnabled,
     crossfadeSeconds,
     setCrossfadeEnabled,
@@ -83,6 +85,41 @@ function SettingsView() {
         </div>
 
         <section className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                Gapless playback
+              </h2>
+              <p className="mt-1 text-xs text-zinc-400">
+                Decode the next track while the current one is still playing, so albums and
+                live sets run straight through with no silence at the join.
+              </p>
+            </div>
+            <button
+              role="switch"
+              aria-checked={gaplessEnabled}
+              onClick={() => setGaplessEnabled(!gaplessEnabled)}
+              className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
+                gaplessEnabled
+                  ? "bg-emerald-500 ring-emerald-500"
+                  : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  gaplessEnabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+
+          <p className="mt-4 text-[11px] text-zinc-400">
+            Applies to tracks that are already downloaded. Crossfade takes over the join when
+            it&apos;s switched on below, so the two never fight over the same transition.
+          </p>
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
           <div className="flex items-center justify-between gap-4">
             <div>
               <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">

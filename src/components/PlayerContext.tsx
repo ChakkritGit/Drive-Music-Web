@@ -46,9 +46,15 @@ import {
 } from "@/lib/db";
 
 const SESSION_SAVE_THROTTLE_MS = 5000;
+const GAPLESS_ENABLED_KEY = "drive-music-gapless-enabled";
 const CROSSFADE_ENABLED_KEY = "drive-music-crossfade-enabled";
 const CROSSFADE_SECONDS_KEY = "drive-music-crossfade-seconds";
 export const MAX_CROSSFADE_SECONDS = 12;
+// How early the next track gets decoded into the idle element for a gapless join. Long enough
+// that even a slow decode of a large file is finished in time, short enough that the queue is
+// unlikely to be edited out from under it in the meantime (and if it is, cancelCrossfade
+// disarms it).
+const GAPLESS_ARM_SECONDS = 8;
 const DEFAULT_CROSSFADE_SECONDS = 5;
 const VOLUME_NORMALIZATION_ENABLED_KEY = "drive-music-volume-normalization-enabled";
 const EQ_ENABLED_KEY = "drive-music-eq-enabled";
@@ -94,6 +100,10 @@ interface PlayerContextValue {
   playNextIndex: number | null;
   /** The upcoming tracks after the current one, in actual play order (respects shuffle/playNextIndex). */
   upNext: { file: DriveFile; index: number }[];
+  /** Whether the next track is pre-buffered and started the instant this one ends, with no
+   * decode/fetch gap in between. */
+  gaplessEnabled: boolean;
+  setGaplessEnabled: (value: boolean) => void;
   /** Whether the automatic transition into the next track should crossfade instead of cutting. */
   crossfadeEnabled: boolean;
   /** Crossfade length in seconds, clamped to [0, MAX_CROSSFADE_SECONDS]. */
@@ -492,6 +502,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // Set right before setCurrentIndex() at the end of a crossfade, so the load effect can tell
   // "this transition was already faded in on the other element" apart from a normal load.
   const crossfadeCommittedForRef = useRef<string | null>(null);
+  // Gapless playback: the next track, already decoded into the *inactive* element and sitting
+  // paused at 0:00, waiting for the current one to end. Its blob URL lives in fadeObjectUrlRef
+  // (the same slot a crossfade uses — the two never run at once, see handleTimeUpdate), so
+  // firing it reuses the crossfade's commit path wholesale.
+  const gaplessArmedRef = useRef<{ fileId: string; index: number } | null>(null);
 
   const previousFileRef = useRef<DriveFile | null>(null);
   const modelInitializedRef = useRef(false);
@@ -526,6 +541,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [shuffleOrder, setShuffleOrder] = useState<number[]>([]);
   const [currentSource, setCurrentSource] = useState<PlaySource | null>(null);
   const [playNextIndex, setPlayNextIndex] = useState<number | null>(null);
+  const [gaplessEnabled, setGaplessEnabledState] = useState(true);
   const [crossfadeEnabled, setCrossfadeEnabledState] = useState(false);
   const [crossfadeSeconds, setCrossfadeSecondsState] = useState(
     DEFAULT_CROSSFADE_SECONDS,
@@ -542,8 +558,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    const storedEnabled = localStorage.getItem(CROSSFADE_ENABLED_KEY);
+    const storedGapless = localStorage.getItem(GAPLESS_ENABLED_KEY);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed from localStorage on mount
+    if (storedGapless !== null) setGaplessEnabledState(storedGapless === "true");
+    const storedEnabled = localStorage.getItem(CROSSFADE_ENABLED_KEY);
     if (storedEnabled !== null) setCrossfadeEnabledState(storedEnabled === "true");
     const storedSeconds = Number(localStorage.getItem(CROSSFADE_SECONDS_KEY));
     if (Number.isFinite(storedSeconds) && storedSeconds > 0) {
@@ -571,6 +589,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (Number.isFinite(storedSpatialIntensity)) {
       setSpatialAudioIntensityState(clampSpatialIntensity(storedSpatialIntensity));
     }
+  }, []);
+
+  const setGaplessEnabled = useCallback((value: boolean) => {
+    setGaplessEnabledState(value);
+    localStorage.setItem(GAPLESS_ENABLED_KEY, String(value));
   }, []);
 
   const setCrossfadeEnabled = useCallback((value: boolean) => {
@@ -654,6 +677,24 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // the fade-out) and resets the inactive one, so a manual skip/seek/pause mid-fade cuts
   // cleanly instead of leaving either element stuck at a partial volume.
   const cancelCrossfade = useCallback(() => {
+    // A pre-buffered gapless track is invalidated by every one of this function's callers
+    // (skip, seek, pause, queue edit): what plays next, or where the current track is, has
+    // just changed. Cleared before the early return below, since arming one doesn't create
+    // any crossfade state.
+    const armed = gaplessArmedRef.current;
+    gaplessArmedRef.current = null;
+    if (armed) {
+      const idle = getInactiveAudio();
+      if (idle) {
+        idle.pause();
+        idle.removeAttribute("src");
+        idle.load();
+      }
+      if (fadeObjectUrlRef.current) {
+        URL.revokeObjectURL(fadeObjectUrlRef.current);
+        fadeObjectUrlRef.current = null;
+      }
+    }
     const state = crossfadeStateRef.current;
     if (!state) return;
     crossfadeStateRef.current = null;
@@ -845,6 +886,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const promoted = getActiveAudio();
         if (promoted?.paused) void tryPlay(promoted, audioContextRef.current);
         if (promoted) {
+          // It was already playing as the inactive element, so its `play` event was ignored
+          // by handlePlay's active-only guard — nothing else would flip this back on.
+          setIsPlaying(!promoted.paused);
           // The promoted element's `loadedmetadata` fired back while it was still the
           // inactive fade-in element, so handleLoadedMetadata's active-only guard dropped it
           // — duration would otherwise be stuck at the outgoing track's length, making the
@@ -1242,11 +1286,65 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setCurrentIndex(order[Math.max(0, position - 1)]);
   }, [queue.length, currentIndex, shuffle, resolveShuffleOrder, cancelCrossfade]);
 
+  // Loads the (already downloaded) next track into the idle audio element and leaves it paused
+  // at 0:00, so `handleEnded` can start it immediately instead of the browser having to fetch
+  // a blob URL, demux and decode first — which is exactly the silence between tracks that
+  // gapless playback is meant to remove.
+  const armGapless = useCallback(
+    (targetIndex: number) => {
+      const targetFile = queue[targetIndex];
+      const cached = cachedTracks.get(targetFile?.id ?? "");
+      const idle = getInactiveAudio();
+      if (!targetFile || !cached || !idle) return;
+      if (gaplessArmedRef.current?.fileId === targetFile.id) return;
+
+      if (fadeObjectUrlRef.current) URL.revokeObjectURL(fadeObjectUrlRef.current);
+      const url = URL.createObjectURL(cached.blob);
+      fadeObjectUrlRef.current = url;
+      idle.src = url;
+      idle.currentTime = 0;
+      // Silent until it's actually promoted — an armed element that never fires (the user
+      // skipped, say) must not leak any audio, and `load()` is what forces the decode now.
+      const idleGain = getGainNode(idle);
+      if (idleGain) idleGain.gain.value = 0;
+      idle.load();
+      gaplessArmedRef.current = { fileId: targetFile.id, index: targetIndex };
+    },
+    [queue, cachedTracks, getInactiveAudio, getGainNode],
+  );
+
+  // Starts the armed track right now and commits the transition through the same path a
+  // finished crossfade uses (crossfadeCommittedForRef → the load effect promotes the element
+  // that's already playing rather than reloading it). Returns false if nothing was armed, in
+  // which case the caller falls back to the normal end-of-track handling.
+  const fireGapless = useCallback((): boolean => {
+    const armed = gaplessArmedRef.current;
+    if (!armed) return false;
+    const incoming = getInactiveAudio();
+    const incomingGain = getGainNode(incoming);
+    if (!incoming || !incomingGain || !incoming.src) return false;
+    gaplessArmedRef.current = null;
+
+    incomingGain.gain.value = volume * trackGain(armed.fileId);
+    incoming.currentTime = 0;
+    void tryPlay(incoming, audioContextRef.current);
+
+    crossfadeCommittedForRef.current = armed.fileId;
+    if (playNextIndex === armed.index) setPlayNextIndex(null);
+    setCurrentIndex(armed.index);
+    return true;
+  }, [getInactiveAudio, getGainNode, volume, trackGain, playNextIndex]);
+
   const handleEnded = useCallback(() => {
     // A crossfade already committed this transition (setCurrentIndex was called as the ramp
     // finished) — the native `ended` event firing moments later on the demoted element (if
     // timing was tight) shouldn't also run the normal end-of-track logic below.
     if (crossfadeStateRef.current || crossfadeCommittedForRef.current) return;
+
+    // The next track is already decoded and waiting on the other element — start it here,
+    // before anything below can go asynchronous. Skipped for loop-one, which never advances
+    // (nothing gets armed for it either: peekNextIndex returns null).
+    if (loopMode !== "one" && fireGapless()) return;
 
     if (loopMode === "one") {
       const audio = getActiveAudio();
@@ -1319,6 +1417,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     currentMeta,
     model,
     getActiveAudio,
+    fireGapless,
   ]);
 
   // Pure "what would play next" — mirrors handleEnded's decision tree but returns the answer
@@ -1662,23 +1761,38 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         persistSession(t);
       }
 
-      if (!crossfadeEnabled || crossfadeSeconds <= 0) return;
       if (crossfadeStateRef.current) return;
       const dur = el.duration;
       if (!Number.isFinite(dur) || dur <= 0) return;
       const remaining = dur - t;
-      if (remaining <= 0 || remaining > crossfadeSeconds) return;
+      if (remaining <= 0) return;
+
+      // Crossfade wins when it's on: it already covers the join (and it needs the idle element
+      // for its own fade-in, so both arming it and fading into it would fight over the same
+      // element). Gapless is what handles the join when the transition is a straight cut.
+      if (crossfadeEnabled && crossfadeSeconds > 0) {
+        if (remaining > crossfadeSeconds) return;
+        const target = peekNextIndex();
+        if (target === null) return;
+        startCrossfade(target, el);
+        return;
+      }
+
+      if (!gaplessEnabled) return;
+      if (remaining > GAPLESS_ARM_SECONDS) return;
       const target = peekNextIndex();
       if (target === null) return;
-      startCrossfade(target, el);
+      armGapless(target);
     },
     [
       getActiveAudio,
       persistSession,
       crossfadeEnabled,
       crossfadeSeconds,
+      gaplessEnabled,
       peekNextIndex,
       startCrossfade,
+      armGapless,
       advanceCrossfadeRamp,
     ],
   );
@@ -1712,6 +1826,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (e.currentTarget.ended) return;
         cancelCrossfade();
       }
+      // Same story for a gapless join: this `pause` is the outgoing track hitting its end, and
+      // `ended` (which starts the pre-buffered next track on the other element) is about to
+      // fire. Reporting "paused" here would stick — the incoming element's own `play` event is
+      // ignored while it's still the inactive one.
+      if (e.currentTarget.ended && gaplessArmedRef.current) return;
       setIsPlaying(false);
       persistSession(progressRef.current);
     },
@@ -1740,6 +1859,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       currentSource,
       playNextIndex,
       upNext,
+      gaplessEnabled,
+      setGaplessEnabled,
       crossfadeEnabled,
       crossfadeSeconds,
       setCrossfadeEnabled,
@@ -1799,6 +1920,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       currentSource,
       playNextIndex,
       upNext,
+      gaplessEnabled,
+      setGaplessEnabled,
       crossfadeEnabled,
       crossfadeSeconds,
       setCrossfadeEnabled,
@@ -1849,6 +1972,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         onEnded={handleEnded}
         onPlay={handlePlay}
         onPause={handlePause}
+        // Buffer aggressively: an armed gapless track has to be fully decoded and ready to
+        // start the instant the current one ends, and the default ("metadata" in some
+        // browsers) would only fetch the header.
+        preload="auto"
         className="hidden"
       />
       <audio
@@ -1858,6 +1985,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         onEnded={handleEnded}
         onPlay={handlePlay}
         onPause={handlePause}
+        // Buffer aggressively: an armed gapless track has to be fully decoded and ready to
+        // start the instant the current one ends, and the default ("metadata" in some
+        // browsers) would only fetch the header.
+        preload="auto"
         className="hidden"
       />
     </PlayerContext.Provider>
