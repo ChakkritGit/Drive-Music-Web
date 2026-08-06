@@ -1,11 +1,11 @@
 "use client";
 
-import { CloudCheck, Heart, ListEnd, Loader2, Music, Pause, Play, Trash2 } from "lucide-react";
+import { CloudCheck, Heart, Loader2, Music, Pause } from "lucide-react";
 import clsx from "clsx";
 import type { CachedTrack, DriveFile, PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists } from "@/components/PlaylistsContext";
-import { AddToPlaylistMenu } from "@/components/AddToPlaylistMenu";
+import { TrackActionsMenu } from "@/components/TrackActionsMenu";
 
 interface TrackRowProps {
   file: DriveFile;
@@ -14,6 +14,8 @@ interface TrackRowProps {
   cachedTrack?: CachedTrack;
   source?: PlaySource;
   onRemove?: () => void;
+  /** Wording for the remove action in the menu — what it removes from differs per list. */
+  removeLabel?: string;
 }
 
 function formatDuration(sec?: number): string {
@@ -23,9 +25,17 @@ function formatDuration(sec?: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function TrackRow({ file, queue, index, cachedTrack, source, onRemove }: TrackRowProps) {
-  const { currentFile, isPlaying, isLoading, play, togglePlay, addToQueue } = usePlayer();
-  const { isFavorite, toggleFavorite } = usePlaylists();
+export function TrackRow({
+  file,
+  queue,
+  index,
+  cachedTrack,
+  source,
+  onRemove,
+  removeLabel,
+}: TrackRowProps) {
+  const { currentFile, isPlaying, isLoading, play, togglePlay } = usePlayer();
+  const { isFavorite } = usePlaylists();
   const isCurrent = currentFile?.id === file.id;
   const favorited = isFavorite(file.id);
   const meta = cachedTrack?.parsedMeta;
@@ -70,44 +80,11 @@ export function TrackRow({ file, queue, index, cachedTrack, source, onRemove }: 
       <div className="flex shrink-0 items-center gap-2 text-zinc-400">
         {meta?.durationSec ? <span className="text-xs tabular-nums">{formatDuration(meta.durationSec)}</span> : null}
         {cachedTrack && <CloudCheck className="h-4 w-4 text-emerald-500" />}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleFavorite(file);
-          }}
-          className={clsx(
-            "rounded-full p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800",
-            favorited ? "text-red-500" : "text-zinc-400",
-          )}
-          aria-label={favorited ? "Remove from favorites" : "Add to favorites"}
-        >
-          <Heart className={clsx("h-4 w-4", favorited && "fill-current")} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            addToQueue(file);
-          }}
-          className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          aria-label="Add to queue"
-        >
-          <ListEnd className="h-4 w-4" />
-        </button>
-        <AddToPlaylistMenu file={file} />
-        {isCurrent && !isLoading && (
-          <button onClick={handleSelect} className="rounded-full p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          </button>
-        )}
-        {onRemove && (
-          <button
-            onClick={onRemove}
-            className="rounded-full p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950"
-            aria-label="Remove from downloads"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
-        )}
+        {/* Favorited is worth showing at a glance, but as a plain indicator — toggling it (and
+            every other per-track action) now lives in the menu, so the row keeps a single
+            tappable surface: play. */}
+        {favorited && <Heart className="h-4 w-4 fill-current text-red-500" aria-label="Favorite" />}
+        <TrackActionsMenu file={file} onRemove={onRemove} removeLabel={removeLabel} />
       </div>
     </li>
   );

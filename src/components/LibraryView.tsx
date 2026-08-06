@@ -83,6 +83,7 @@ export function LibraryView() {
               index={index}
               source={LIBRARY_SOURCE}
               onRemove={() => removeFromCache(t.fileId)}
+              removeLabel="Remove download"
             />
           ))}
         </ul>

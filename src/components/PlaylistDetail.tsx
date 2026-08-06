@@ -69,6 +69,7 @@ export function PlaylistDetail({ playlist, onBack }: { playlist: Playlist; onBac
               cachedTrack={cachedTracks.get(file.id)}
               source={{ type: "playlist", id: playlist.id, name: playlist.name }}
               onRemove={() => removeTrackFromPlaylist(playlist.id, file.id)}
+              removeLabel="Remove from playlist"
             />
           ))}
         </ul>

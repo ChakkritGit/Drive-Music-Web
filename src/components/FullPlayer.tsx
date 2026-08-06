@@ -373,6 +373,7 @@ export function FullPlayer() {
                   index={index}
                   cachedTrack={cachedTracks.get(file.id)}
                   onRemove={() => removeFromQueue(index)}
+                  removeLabel="Remove from queue"
                 />
               ))}
             </ul>
