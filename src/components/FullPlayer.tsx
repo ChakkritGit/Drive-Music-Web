@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   Heart,
+  ListMusic,
   Music,
   Pause,
   Play,
@@ -13,9 +14,7 @@ import {
   SkipBack,
   SkipForward,
   Users,
-  Volume1,
-  Volume2,
-  VolumeX,
+  X,
 } from "lucide-react";
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
@@ -44,7 +43,6 @@ export function FullPlayer() {
     error,
     progress,
     duration,
-    volume,
     shuffle,
     loopMode,
     isExpanded,
@@ -54,7 +52,6 @@ export function FullPlayer() {
     next,
     prev,
     seek,
-    changeVolume,
     toggleShuffle,
     cycleLoopMode,
     collapse,
@@ -66,19 +63,18 @@ export function FullPlayer() {
   const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
-  const [lastVolume, setLastVolume] = useState(1);
+  const [showQueue, setShowQueue] = useState(false);
   const glowRef = useRef<HTMLDivElement | null>(null);
 
-  function toggleMute() {
-    if (volume > 0) {
-      setLastVolume(volume);
-      changeVolume(0);
-    } else {
-      changeVolume(lastVolume || 1);
-    }
+  // Collapsing the player leaves this component mounted, so the sheet's state survives —
+  // reopening Now Playing would come back with the queue already covering it. Adjusted during
+  // render on the transition (React's recommended alternative to a setState-in-effect) rather
+  // than only in the collapse button's handler, which isn't the only way out of this view.
+  const [wasExpanded, setWasExpanded] = useState(isExpanded);
+  if (wasExpanded !== isExpanded) {
+    setWasExpanded(isExpanded);
+    if (!isExpanded) setShowQueue(false);
   }
-
-  const VolumeIcon = volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
   useEffect(() => {
     let cancelled = false;
@@ -176,7 +172,8 @@ export function FullPlayer() {
         <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
           Now Playing
         </p>
-        {syncAvailable ? (
+        <div className="flex items-center gap-1">
+          {syncAvailable && (
           <button
             onClick={toggleSynced}
             className={clsx(
@@ -190,9 +187,22 @@ export function FullPlayer() {
           >
             <Users className="h-5 w-5" />
           </button>
-        ) : (
-          <div className="w-9" />
-        )}
+          )}
+          {/* The queue used to be a permanently-expanded list at the bottom of this view,
+              pushing the transport controls off-screen on a phone whenever anything was
+              queued. It's a sheet now, opened from here. */}
+          <button
+            onClick={() => setShowQueue(true)}
+            className="relative rounded-full p-2 text-zinc-500 transition active:scale-90 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+            aria-label="Show queue"
+            title="Up Next"
+          >
+            <ListMusic className="h-5 w-5" />
+            {upNext.length > 0 && (
+              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
@@ -340,46 +350,50 @@ export function FullPlayer() {
           </button>
         </div>
 
-        <div className="mx-auto flex w-full max-w-[12rem] items-center gap-2">
-          <button
-            onClick={toggleMute}
-            className="rounded-full p-1.5 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-            aria-label={volume === 0 ? "Unmute" : "Mute"}
-          >
-            <VolumeIcon className="h-4 w-4" />
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            onChange={(e) => changeVolume(Number(e.target.value))}
-            className="flex-1 accent-zinc-900 dark:accent-zinc-100"
-          />
-        </div>
-
-        {upNext.length > 0 && (
-          <div className="w-full max-w-sm rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-900/60">
-            <p className="mb-1 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
-              Up Next
-            </p>
-            <ul className="max-h-64 divide-y divide-zinc-200/70 overflow-y-auto dark:divide-zinc-800/70">
-              {upNext.map(({ file, index }) => (
-                <TrackRow
-                  key={`${file.id}-${index}`}
-                  file={file}
-                  queue={queue}
-                  index={index}
-                  cachedTrack={cachedTracks.get(file.id)}
-                  onRemove={() => removeFromQueue(index)}
-                  removeLabel="Remove from queue"
-                />
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
+
+      {/* Sheet, not a separate portal: it belongs to this overlay, so it lives inside it and
+          inherits its stacking context (and its aria-hidden while the player is collapsed). */}
+      {showQueue && (
+        <div className="absolute inset-0 z-10 flex flex-col justify-end">
+          <button
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setShowQueue(false)}
+            aria-label="Close queue"
+          />
+          <div className="relative flex max-h-[70%] flex-col animate-[slideUp_250ms_ease-out] rounded-t-3xl border-t border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex items-center justify-between px-5 pb-2 pt-4">
+              <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
+                Up Next
+              </p>
+              <button
+                onClick={() => setShowQueue(false)}
+                className="rounded-full p-1.5 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                aria-label="Close queue"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {upNext.length === 0 ? (
+              <p className="px-5 pb-6 text-sm text-zinc-400">Nothing queued after this track.</p>
+            ) : (
+              <ul className="min-h-0 flex-1 divide-y divide-zinc-100 overflow-y-auto px-5 pb-4 dark:divide-zinc-900">
+                {upNext.map(({ file, index }) => (
+                  <TrackRow
+                    key={`${file.id}-${index}`}
+                    file={file}
+                    queue={queue}
+                    index={index}
+                    cachedTrack={cachedTracks.get(file.id)}
+                    onRemove={() => removeFromQueue(index)}
+                    removeLabel="Remove from queue"
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

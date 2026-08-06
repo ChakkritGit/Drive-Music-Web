@@ -43,6 +43,16 @@ button:not(:disabled),
   }
 }
 
+/* Bottom sheets (the Now Playing queue) sliding in from the bottom edge. */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
 @keyframes breathe {
   0%,
   100% {
