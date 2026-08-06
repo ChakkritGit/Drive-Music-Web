@@ -22,7 +22,6 @@ import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
-import { featherImageEdges } from "@/lib/featherImage";
 import { TrackRow } from "@/components/TrackRow";
 
 const FALLBACK_GLOW = "rgb(120, 120, 120)";
@@ -67,7 +66,6 @@ export function FullPlayer() {
   const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
-  const [featheredArt, setFeatheredArt] = useState<string | null>(null);
   const [lastVolume, setLastVolume] = useState(1);
   const glowRef = useRef<HTMLDivElement | null>(null);
 
@@ -91,24 +89,6 @@ export function FullPlayer() {
     }
     getAverageColor(currentMeta.pictureDataUrl).then((color) => {
       if (!cancelled) setGlowColor(color);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentMeta?.pictureDataUrl]);
-
-  // Bakes real transparency into the artwork's edges (see featherImageEdges) so they fade into
-  // the blurred glow behind the page — while this is processing (a track just changed), the
-  // sharp original shows briefly rather than nothing.
-  useEffect(() => {
-    let cancelled = false;
-    // Cleared up front (not just for the "no artwork" case) so a still-processing new track
-    // shows its own sharp original instead of the *previous* track's feathered image.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reset on track change, see comment above
-    setFeatheredArt(null);
-    if (!currentMeta?.pictureDataUrl) return;
-    featherImageEdges(currentMeta.pictureDataUrl).then((url) => {
-      if (!cancelled) setFeatheredArt(url);
     });
     return () => {
       cancelled = true;
@@ -167,11 +147,20 @@ export function FullPlayer() {
           : "pointer-events-none translate-y-6 opacity-0",
       )}
     >
+      {/* The ambient backdrop is the cover art itself, blown up and blurred into a soft wash
+          of the track's own colours, rather than the flat average-colour fill it used to be.
+          The average colour stays underneath as the fill for tracks with no artwork (and while
+          one is decoding). Inset well past the 100px blur radius on every side: unlike a flat
+          fill, a blurred *image* fades toward transparent at its own edges, which would show
+          as a vignette around the viewport if the layer stopped any closer in. */}
       <div
         ref={glowRef}
-        className="pointer-events-none absolute -inset-20 animate-[breathe_30s_ease-in-out_infinite] blur-[100px]"
+        className="pointer-events-none absolute -inset-40 animate-[breathe_30s_ease-in-out_infinite] bg-cover bg-center blur-[100px]"
         style={{
           backgroundColor: glowColor,
+          backgroundImage: currentMeta?.pictureDataUrl
+            ? `url(${currentMeta.pictureDataUrl})`
+            : undefined,
           transition: "background-color 700ms ease-out",
         }}
       />
@@ -210,17 +199,17 @@ export function FullPlayer() {
         <div
           key={currentFile?.id ?? "none"}
           className={clsx(
-            "flex h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] items-center justify-center overflow-hidden rounded-2xl sm:h-80 sm:w-80",
-            // No fill behind the artwork itself — its own edges are genuinely transparent
-            // (see featherImageEdges), so the blurred glow behind the page shows through
-            // them directly. Only the icon fallback (no artwork at all) needs a backdrop.
+            // Crisp, fully-opaque artwork with a real drop shadow — it used to have its edges
+            // feathered into transparency to melt into the backdrop, which softened the
+            // artwork itself. The blurred backdrop above now provides that halo instead.
+            "flex h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] items-center justify-center overflow-hidden rounded-2xl shadow-2xl shadow-black/30 sm:h-80 sm:w-80",
             !currentMeta?.pictureDataUrl && "bg-zinc-100 dark:bg-zinc-800",
           )}
         >
           {currentMeta?.pictureDataUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={featheredArt ?? currentMeta.pictureDataUrl}
+              src={currentMeta.pictureDataUrl}
               alt=""
               className="h-full w-full object-cover"
             />
