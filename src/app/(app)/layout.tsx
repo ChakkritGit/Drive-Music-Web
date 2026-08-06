@@ -11,11 +11,11 @@ import {
   Library as LibraryIcon,
   ListMusic,
   LogOut,
-  Music,
   Settings,
 } from "lucide-react";
 import clsx from "clsx";
 import { SignInScreen } from "@/components/SignInScreen";
+import { AppLogo } from "@/components/AppLogo";
 
 const NAV_ITEMS: {
   href: string;
@@ -83,9 +83,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (status === "loading") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900 dark:bg-zinc-100">
-          <Music className="h-6 w-6 text-white dark:text-zinc-900" />
-        </div>
+        <AppLogo size={56} />
         <div>
           <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
           <p className="mt-2 max-w-xs text-sm text-zinc-500 dark:text-zinc-400">
@@ -124,6 +122,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
       >
         <div className="flex items-center gap-2">
+          <AppLogo size={24} className="sm:hidden" />
           <span className="text-base font-semibold text-zinc-900 sm:hidden dark:text-zinc-50">
             Drive Music
           </span>

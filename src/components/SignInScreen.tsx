@@ -2,15 +2,13 @@
 
 import { signIn } from "next-auth/react";
 import Link from "next/link";
-import { Music } from "lucide-react";
+import { AppLogo } from "@/components/AppLogo";
 
 export function SignInScreen() {
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 p-8 text-center shadow-sm dark:border-zinc-800">
-        <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900 dark:bg-zinc-100">
-          <Music className="h-6 w-6 text-white dark:text-zinc-900" />
-        </div>
+        <AppLogo size={56} className="mx-auto mb-6" />
         <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
           Drive Music is a personal audio player for the music files already sitting in your
