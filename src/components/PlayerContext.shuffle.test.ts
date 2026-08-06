@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   growShuffleWindow,
+  remapShuffleOrderAfterInsert,
+  remapShuffleOrderAfterRemoval,
   seedShuffleWindow,
   SHUFFLE_WINDOW,
   weightedShuffledIndices,
@@ -152,5 +154,51 @@ describe("growShuffleWindow", () => {
   it("does nothing for a single-track queue with nothing else to add", () => {
     const grown = growShuffleWindow([0], 1, [1], false, 0);
     expect(grown).toEqual([0]);
+  });
+});
+
+describe("remapShuffleOrderAfterRemoval", () => {
+  it("drops the removed index and shifts later ones down, keeping the rest in order", () => {
+    // Queue [a,b,c,d,e] played in the order c,a,e,b,d — delete b (index 1).
+    expect(remapShuffleOrderAfterRemoval([2, 0, 4, 1, 3], 1)).toEqual([1, 0, 3, 2]);
+  });
+
+  it("leaves an order untouched when the removed track was never in the window", () => {
+    expect(remapShuffleOrderAfterRemoval([2, 0, 1], 5)).toEqual([2, 0, 1]);
+  });
+
+  it("never re-orders the surviving tracks, whatever gets deleted", () => {
+    const order = seedShuffleWindow(30, 7, Array.from({ length: 30 }, () => 1));
+    for (let removed = 0; removed < 30; removed++) {
+      const survivors = order.filter((i) => i !== removed);
+      const remapped = remapShuffleOrderAfterRemoval(order, removed);
+      // Map each survivor back to its pre-removal index: the sequence must be identical.
+      expect(remapped.map((i) => (i >= removed ? i + 1 : i))).toEqual(survivors);
+    }
+  });
+});
+
+describe("remapShuffleOrderAfterInsert", () => {
+  it("places a moved track right after the current one without disturbing the rest", () => {
+    // Queue [a,b,c,d,e], playing a (index 0), window a,c,e,b,d. "Play next" on e (index 4)
+    // moves it to index 1 — b,c,d shift up one.
+    expect(remapShuffleOrderAfterInsert([0, 2, 4, 1, 3], 4, 1, 0)).toEqual([
+      0, 1, 3, 2, 4,
+    ]);
+  });
+
+  it("inserts a brand-new track (not previously in the queue) after the current one", () => {
+    expect(remapShuffleOrderAfterInsert([0, 2, 1], null, 1, 0)).toEqual([0, 1, 3, 2]);
+  });
+
+  it("keeps the upcoming tracks' relative order intact", () => {
+    const before = [0, 3, 1, 4, 2];
+    const after = remapShuffleOrderAfterInsert(before, 4, 1, 0);
+    const inserted = after.indexOf(1);
+    const others = after.filter((_, p) => p !== inserted);
+    // Undo the shift: everything except the newly-inserted entry maps back to the original.
+    expect(others.map((i) => (i > 1 ? i - 1 : i))).toEqual(
+      before.filter((i) => i !== 4).map((i) => (i > 4 ? i - 1 : i)),
+    );
   });
 });

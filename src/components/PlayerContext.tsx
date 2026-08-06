@@ -279,6 +279,45 @@ export function growShuffleWindow(
   return [...order, pickWeightedFrom(candidates, weights)];
 }
 
+/** Rewrites a shuffle window after the queue entry at `removedIndex` is deleted: drops that
+ * entry and shifts every later index down by one. Editing the queue must never change what
+ * plays next — clearing the order instead (what this used to do) makes the effect below reseed
+ * a brand-new random window, so deleting one track from "Up Next" visibly re-randomizes all the
+ * others. */
+export function remapShuffleOrderAfterRemoval(
+  order: number[],
+  removedIndex: number,
+): number[] {
+  return order
+    .filter((i) => i !== removedIndex)
+    .map((i) => (i > removedIndex ? i - 1 : i));
+}
+
+/** Rewrites a shuffle window after `addToQueue` moves/inserts a track: the entry that was at
+ * `fromIndex` (or nothing, for a brand-new track) ends up at `toIndex`. Everything the window
+ * already had keeps its relative order — the moved track is placed right after `pinned` (the
+ * currently-playing track), matching where it will actually play. */
+export function remapShuffleOrderAfterInsert(
+  order: number[],
+  fromIndex: number | null,
+  toIndex: number,
+  pinned: number,
+): number[] {
+  const withoutMoved =
+    fromIndex === null ? order : remapShuffleOrderAfterRemoval(order, fromIndex);
+  // Indices in the post-removal queue at or after the insertion point shift up by one.
+  const shifted = withoutMoved.map((i) => (i >= toIndex ? i + 1 : i));
+  const pinnedPosition = shifted.indexOf(pinned);
+  // The window no longer describes where we are (shouldn't happen — the caller only calls this
+  // with a non-empty order containing the current track — but reseeding is handled elsewhere).
+  if (pinnedPosition === -1) return shifted;
+  return [
+    ...shifted.slice(0, pinnedPosition + 1),
+    toIndex,
+    ...shifted.slice(pinnedPosition + 1),
+  ];
+}
+
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const { showToast } = useToast();
@@ -934,11 +973,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       cancelCrossfade();
       // Shuffle stays on across a new queue — eagerly seed a fresh windowed shuffle order
       // right away (pinned at the starting track) so "Up Next" is correct immediately, not
-      // just after the first skip.
-      setShuffleOrder(
-        shuffle && newQueue.length > 0
-          ? seedShuffleWindow(newQueue.length, index, computeWeightsFor(newQueue))
-          : [],
+      // just after the first skip. But picking a track out of "Up Next" (Player.tsx) calls this
+      // with the *same* queue, and reseeding there would re-randomize every remaining track
+      // just because one of them was jumped to — keep the existing order in that case, and let
+      // the pin move to `index` inside it.
+      const sameQueue =
+        newQueue.length === queue.length &&
+        newQueue.every((f, i) => f.id === queue[i]?.id);
+      setShuffleOrder((order) =>
+        shuffle && sameQueue && order.includes(index)
+          ? order
+          : shuffle && newQueue.length > 0
+            ? seedShuffleWindow(newQueue.length, index, computeWeightsFor(newQueue))
+            : [],
       );
       setQueue(newQueue);
       setCurrentIndex(index);
@@ -952,7 +999,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }).then(refreshRecentSources);
       }
     },
-    [shuffle, computeWeightsFor, refreshRecentSources, cancelCrossfade],
+    [shuffle, queue, computeWeightsFor, refreshRecentSources, cancelCrossfade],
   );
 
   // Makes `file` play right after the current track — not at the end of the queue. If it's
@@ -999,10 +1046,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           setCurrentIndex(adjustedCurrentIndex);
         }
         setPlayNextIndex(insertAt);
-        // The shuffle order's stored positions no longer line up after this reordering —
-        // rather than remap it, just let it regenerate fresh on the next skip (the length
-        // mismatch — or emptiness — is what `resolveShuffleOrder` checks for).
-        setShuffleOrder([]);
+        // Remap the stored positions in place. Discarding the order here would make the whole
+        // rest of "Up Next" re-randomize just because one track was queued next.
+        setShuffleOrder((order) =>
+          order.length === 0
+            ? order
+            : remapShuffleOrderAfterInsert(
+                order,
+                existingIndex === -1 ? null : existingIndex,
+                insertAt,
+                adjustedCurrentIndex,
+              ),
+        );
         return nextQueue;
       });
 
@@ -1025,8 +1080,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (pIdx === null || pIdx === index) return null;
         return pIdx > index ? pIdx - 1 : pIdx;
       });
-      // Stale after this — regenerate fresh on the next skip (same reasoning as addToQueue).
-      setShuffleOrder([]);
+      // Shift the stored positions past the hole instead of dropping the order — regenerating
+      // it would re-randomize the entire rest of "Up Next" on every single delete.
+      setShuffleOrder((order) =>
+        order.length === 0 ? order : remapShuffleOrderAfterRemoval(order, index),
+      );
 
       showToast(`Removed from queue: ${removed.name.replace(/\.[^./]+$/, "")}`);
     },
@@ -1537,9 +1595,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // this, `upNext`'s preview, a crossfade's early peek (`peekNextIndex`), and the actual advance
   // (`advanceShuffle`) could each independently reseed their own random window and disagree
   // with each other — "Up Next" showing one track, then a completely different one actually
-  // playing. `addToQueue`/`removeFromQueue` deliberately reset this to `[]` to regenerate fresh
-  // rather than remap stale positions; this effect is what actually regenerates it, immediately,
-  // so every consumer reads the same persisted order instead of racing separate reseeds. It also
+  // playing. `addToQueue`/`removeFromQueue` deliberately remap the stored positions in place
+  // (see `remapShuffleOrderAfterInsert`/`AfterRemoval`) rather than clearing them, precisely so
+  // editing the queue never reaches the reseed below and re-randomizes what's already lined up.
+  // This effect is what regenerates the order when it genuinely is stale, immediately, so every
+  // consumer reads the same persisted order instead of racing separate reseeds. It also
   // tops the window back up after a crossfade commit, which changes `currentIndex` without ever
   // calling `advanceShuffle`/`growShuffleWindow` itself.
   useEffect(() => {

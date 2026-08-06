@@ -15,7 +15,7 @@ const GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/permissions";
 export default function PrivacyPolicyPage() {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-6 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
+      <div className="mx-auto max-w-2xl px-6 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
         <div className="mb-6 grid grid-cols-[auto_1fr_auto] items-center gap-2">
           <Link
             href="/"

@@ -33,6 +33,10 @@ function formatTime(sec: number): string {
 // that render the mobile bottom tab nav.
 const APP_GROUP_ROUTES = ["/", "/browse", "/playlists", "/library"];
 
+// Legal pages are standalone documents (also linked from the signed-out screen) — the playback
+// bar has nothing to do with reading them, so it stays out of the way entirely there.
+const PLAYER_HIDDEN_ROUTES = ["/privacy", "/terms"];
+
 export function Player() {
   const {
     queue,
@@ -84,6 +88,16 @@ export function Player() {
       (route) => pathname === route || pathname.startsWith(`${route}/`),
     );
   const [showUpNext, setShowUpNext] = useState(false);
+
+  // After every hook above — the Player is mounted globally (Providers.tsx), so bailing out here
+  // only hides the bar; playback and all its state keep running untouched.
+  if (
+    PLAYER_HIDDEN_ROUTES.some(
+      (route) => pathname === route || pathname.startsWith(`${route}/`),
+    )
+  ) {
+    return null;
+  }
 
   return (
     <div
