@@ -224,7 +224,7 @@ function TabLink({
       className={clsx(
         "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition",
         active
-          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+          ? "bg-accent text-white"
           : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
       )}
     >
@@ -251,7 +251,7 @@ function BottomNavLink({
       className={clsx(
         "flex min-w-16 flex-col items-center gap-0.5 rounded-lg px-2 py-1.5 text-[11px] transition",
         active
-          ? "text-zinc-900 dark:text-zinc-50"
+          ? "text-accent"
           : "text-zinc-400 dark:text-zinc-500",
       )}
       aria-label={label}

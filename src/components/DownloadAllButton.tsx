@@ -14,7 +14,7 @@ export function DownloadAllButton({ files }: { files: DriveFile[] }) {
 
   if (remaining === 0) {
     return (
-      <p className="mb-4 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+      <p className="mb-4 flex items-center gap-1.5 text-xs text-accent">
         <CloudCheck className="h-3.5 w-3.5" /> All available offline
       </p>
     );

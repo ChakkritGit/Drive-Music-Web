@@ -116,12 +116,12 @@ export default function TermsOfServicePage() {
                 href="https://myaccount.google.com/permissions"
                 target="_blank"
                 rel="noreferrer"
-                className="text-emerald-600 hover:underline dark:text-emerald-400"
+                className="text-accent hover:underline"
               >
                 your Google Account permissions
               </a>{" "}
               fully disconnects it. See the{" "}
-              <Link href="/privacy" className="text-emerald-600 hover:underline dark:text-emerald-400">
+              <Link href="/privacy" className="text-accent hover:underline">
                 Privacy Policy
               </Link>{" "}
               for how to erase locally stored data as well.
@@ -146,7 +146,7 @@ export default function TermsOfServicePage() {
                 href={REPO_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-emerald-600 hover:underline dark:text-emerald-400"
+                className="text-accent hover:underline"
               >
                 github.com/ChakkritGit/drive-music
               </a>
@@ -155,7 +155,7 @@ export default function TermsOfServicePage() {
                 href={SUPPORT_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-emerald-600 hover:underline dark:text-emerald-400"
+                className="text-accent hover:underline"
               >
                 GitHub Issues
               </a>

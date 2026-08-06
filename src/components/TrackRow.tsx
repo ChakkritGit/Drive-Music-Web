@@ -69,7 +69,9 @@ export function TrackRow({
         <p
           className={clsx(
             "truncate text-sm",
-            isCurrent ? "font-medium text-zinc-900 dark:text-zinc-50" : "text-zinc-700 dark:text-zinc-300",
+            // The playing track is the one "active" thing in a list — same accent as every
+            // other active state in the app.
+            isCurrent ? "font-medium text-accent" : "text-zinc-700 dark:text-zinc-300",
           )}
         >
           {title}
@@ -79,7 +81,7 @@ export function TrackRow({
 
       <div className="flex shrink-0 items-center gap-2 text-zinc-400">
         {meta?.durationSec ? <span className="text-xs tabular-nums">{formatDuration(meta.durationSec)}</span> : null}
-        {cachedTrack && <CloudCheck className="h-4 w-4 text-emerald-500" />}
+        {cachedTrack && <CloudCheck className="h-4 w-4 text-accent" />}
         {/* Favorited is worth showing at a glance, but as a plain indicator — toggling it (and
             every other per-track action) now lives in the menu, so the row keeps a single
             tappable surface: play. */}

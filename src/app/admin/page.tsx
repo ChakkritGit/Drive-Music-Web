@@ -608,7 +608,7 @@ function NetworkVisualizer({
             onClick={toggleIdleMotion}
             className={`relative h-5 w-9 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
               idleMotionEnabled
-                ? "bg-emerald-500 ring-emerald-500"
+                ? "bg-accent ring-accent"
                 : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
             }`}
           >
@@ -630,7 +630,7 @@ function NetworkVisualizer({
             value={idleMotionSpeed}
             disabled={!idleMotionEnabled}
             onChange={(e) => changeIdleMotionSpeed(Number(e.target.value))}
-            className="max-w-32 flex-1 accent-emerald-500 disabled:cursor-not-allowed"
+            className="max-w-32 flex-1 accent-accent disabled:cursor-not-allowed"
           />
         </div>
       </div>

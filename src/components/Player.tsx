@@ -165,7 +165,7 @@ export function Player() {
           step={0.1}
           value={Math.min(progress, duration || 0)}
           onChange={(e) => seek(Number(e.target.value))}
-          className="flex-1 accent-zinc-900 dark:accent-zinc-100"
+          className="flex-1 accent-accent"
         />
         <span className="tabular-nums">{formatTime(duration)}</span>
       </div>
@@ -220,7 +220,7 @@ export function Player() {
             className={clsx(
               "rounded-full p-1.5 transition",
               shuffle
-                ? "text-emerald-500"
+                ? "text-accent"
                 : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Toggle shuffle"
@@ -232,7 +232,7 @@ export function Player() {
             className={clsx(
               "rounded-full p-1.5 transition",
               loopMode !== "off"
-                ? "text-emerald-500"
+                ? "text-accent"
                 : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Cycle repeat mode"
@@ -293,7 +293,7 @@ export function Player() {
             step={0.01}
             value={volume}
             onChange={(e) => changeVolume(Number(e.target.value))}
-            className="w-20 accent-zinc-900 dark:accent-zinc-100"
+            className="w-20 accent-accent"
           />
         </div>
 
@@ -303,7 +303,7 @@ export function Player() {
           className={clsx(
             "cursor-pointer rounded-full p-2 transition disabled:cursor-default disabled:opacity-30",
             showUpNext
-              ? "text-emerald-500"
+              ? "text-accent"
               : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
           )}
           aria-label="Toggle up next"

@@ -101,7 +101,7 @@ function SettingsView() {
               onClick={() => setGaplessEnabled(!gaplessEnabled)}
               className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
                 gaplessEnabled
-                  ? "bg-emerald-500 ring-emerald-500"
+                  ? "bg-accent ring-accent"
                   : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
               }`}
             >
@@ -136,7 +136,7 @@ function SettingsView() {
               onClick={() => setCrossfadeEnabled(!crossfadeEnabled)}
               className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
                 crossfadeEnabled
-                  ? "bg-emerald-500 ring-emerald-500"
+                  ? "bg-accent ring-accent"
                   : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
               }`}
             >
@@ -161,7 +161,7 @@ function SettingsView() {
               value={crossfadeSeconds}
               disabled={!crossfadeEnabled}
               onChange={(e) => setCrossfadeSeconds(Number(e.target.value))}
-              className="w-full accent-zinc-900 disabled:cursor-not-allowed dark:accent-zinc-100"
+              className="w-full accent-accent disabled:cursor-not-allowed"
             />
             <div className="mt-1 flex justify-between text-[11px] text-zinc-400">
               <span>0s</span>
@@ -193,7 +193,7 @@ function SettingsView() {
               onClick={() => setVolumeNormalizationEnabled(!volumeNormalizationEnabled)}
               className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
                 volumeNormalizationEnabled
-                  ? "bg-emerald-500 ring-emerald-500"
+                  ? "bg-accent ring-accent"
                   : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
               }`}
             >
@@ -227,7 +227,7 @@ function SettingsView() {
               onClick={() => setEqEnabled(!eqEnabled)}
               className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
                 eqEnabled
-                  ? "bg-emerald-500 ring-emerald-500"
+                  ? "bg-accent ring-accent"
                   : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
               }`}
             >
@@ -269,7 +269,7 @@ function SettingsView() {
               onClick={() => setSpatialAudioEnabled(!spatialAudioEnabled)}
               className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
                 spatialAudioEnabled
-                  ? "bg-emerald-500 ring-emerald-500"
+                  ? "bg-accent ring-accent"
                   : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
               }`}
             >
@@ -294,7 +294,7 @@ function SettingsView() {
               value={spatialAudioIntensity}
               disabled={!spatialAudioEnabled}
               onChange={(e) => setSpatialAudioIntensity(Number(e.target.value))}
-              className="w-full accent-zinc-900 disabled:cursor-not-allowed dark:accent-zinc-100"
+              className="w-full accent-accent disabled:cursor-not-allowed"
             />
           </div>
         </section>
@@ -316,7 +316,7 @@ function SettingsView() {
               onClick={() => setVisualizerEnabled(!visualizerEnabled)}
               className={`relative h-6 w-11 shrink-0 rounded-full ring-1 ring-inset transition-colors ${
                 visualizerEnabled
-                  ? "bg-emerald-500 ring-emerald-500"
+                  ? "bg-accent ring-accent"
                   : "bg-zinc-100 ring-zinc-300 dark:bg-zinc-800 dark:ring-zinc-600"
               }`}
             >
@@ -414,7 +414,7 @@ function EqBandSlider({
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-zinc-900 disabled:cursor-not-allowed dark:accent-zinc-100"
+        className="w-full accent-accent disabled:cursor-not-allowed"
       />
     </div>
   );

@@ -179,7 +179,7 @@ export function FullPlayer() {
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
               synced
-                ? "text-emerald-500"
+                ? "text-accent"
                 : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
             )}
             aria-label={synced ? "Stop listening together" : "Listen together"}
@@ -199,7 +199,7 @@ export function FullPlayer() {
           >
             <ListMusic className="h-5 w-5" />
             {upNext.length > 0 && (
-              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
             )}
           </button>
         </div>
@@ -250,7 +250,7 @@ export function FullPlayer() {
               </p>
             )}
             {synced && remoteNowPlaying && (
-              <p className="mt-0.5 flex items-center justify-center gap-1 truncate text-xs text-emerald-500">
+              <p className="mt-0.5 flex items-center justify-center gap-1 truncate text-xs text-accent">
                 <Users className="h-3 w-3" /> Synced with {remoteNowPlaying.deviceName}
               </p>
             )}
@@ -286,7 +286,7 @@ export function FullPlayer() {
             step={0.1}
             value={Math.min(progress, duration || 0)}
             onChange={(e) => seek(Number(e.target.value))}
-            className="w-full accent-zinc-900 dark:accent-zinc-100"
+            className="w-full accent-accent"
           />
           <div className="flex justify-between text-xs text-zinc-400">
             <span className="tabular-nums">{formatTime(progress)}</span>
@@ -300,7 +300,7 @@ export function FullPlayer() {
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
               shuffle
-                ? "text-emerald-500"
+                ? "text-accent"
                 : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Toggle shuffle"
@@ -337,7 +337,7 @@ export function FullPlayer() {
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
               loopMode !== "off"
-                ? "text-emerald-500"
+                ? "text-accent"
                 : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Cycle repeat mode"

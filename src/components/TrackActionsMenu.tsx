@@ -124,7 +124,7 @@ export function TrackActionsMenu({
                           className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
                         >
                           <span className="truncate">{p.name}</span>
-                          {inPlaylist && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
+                          {inPlaylist && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
                         </button>
                       </li>
                     );
