@@ -39,6 +39,7 @@ A personal music player that streams and caches audio straight from your own Goo
 - Passive "Playing on [device]" banner
 
 **Settings & data**
+- Eight themes — Light, Dark, Retro, Ocean, Sakura, Horror, Synthwave, Terminal — plus "System"
 - Full settings page for every audio feature above
 - Clear-all-data (local wipe, doesn't sign you out of Google)
 - Public Privacy Policy (`/privacy`) and Terms of Service (`/terms`)

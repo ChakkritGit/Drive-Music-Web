@@ -5,6 +5,7 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Trash2 } from "lucide-react";
 import { SignInScreen } from "@/components/SignInScreen";
+import { ThemePicker } from "@/components/ThemePicker";
 import { usePlayer, MAX_CROSSFADE_SECONDS, MAX_EQ_GAIN_DB } from "@/components/PlayerContext";
 import { clearAllData } from "@/lib/db";
 import { MAX_SPATIAL_INTENSITY } from "@/lib/spatialAudio";
@@ -85,6 +86,14 @@ function SettingsView() {
         </div>
 
         <section className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Theme</h2>
+          <p className="mt-1 text-xs text-zinc-400">
+            Repaints the whole app. Your choice is remembered on this device.
+          </p>
+          <ThemePicker />
+        </section>
+
+        <section className="mt-6 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
           <div className="flex items-center justify-between gap-4">
             <div>
               <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">

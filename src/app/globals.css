@@ -1,33 +1,250 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-  /* The one non-neutral colour in the app. Everything else stays black/white/zinc; this marks
-     what's *active* — the playing track, an enabled setting, a link. Mid-toned on purpose, so
-     a single value carries both themes without a light/dark pair. */
-  --accent: #ab73ba;
-}
+/* `dark:` keys off the scheme the theme script stamps onto <html> (src/lib/themes.ts), not the
+   OS media query — Horror is dark whatever the OS says, and Retro is light. Every existing
+   `… dark:…` pair in the components keeps working untouched; it just asks a different oracle. */
+@custom-variant dark (&:where([data-scheme="dark"], [data-scheme="dark"] *));
 
+/* The whole app is painted from one neutral ramp (zinc-50 … zinc-950, with white/black as its
+   two extremes) plus a single accent. Pointing Tailwind's ramp at variables — rather than at
+   fixed hex — is what makes a theme a ~20-line block below instead of a component rewrite.
+   `inline` matters here: utilities emit `var(--ramp-100)` directly, so redefining the ramp
+   under a `[data-theme]` selector re-skins everything inside it, including a single swatch. */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-accent: var(--accent);
+
+  --color-white: var(--paper);
+  --color-black: var(--ink);
+
+  --color-zinc-50: var(--ramp-50);
+  --color-zinc-100: var(--ramp-100);
+  --color-zinc-200: var(--ramp-200);
+  --color-zinc-300: var(--ramp-300);
+  --color-zinc-400: var(--ramp-400);
+  --color-zinc-500: var(--ramp-500);
+  --color-zinc-600: var(--ramp-600);
+  --color-zinc-700: var(--ramp-700);
+  --color-zinc-800: var(--ramp-800);
+  --color-zinc-900: var(--ramp-900);
+  --color-zinc-950: var(--ramp-950);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ---------------------------------------------------------------------------------------------
+   Themes. `:root` carries Light so anything rendered before the head script runs (or with JS
+   off) is still legible; the script then stamps data-theme/data-scheme onto <html> before the
+   first paint. Each block only needs to state what it changes.
+   --------------------------------------------------------------------------------------------- */
+
+:root,
+[data-theme="light"],
+[data-theme="dark"] {
+  --paper: #ffffff;
+  --ink: #000000;
+
+  --ramp-50: #fafafa;
+  --ramp-100: #f4f4f5;
+  --ramp-200: #e4e4e7;
+  --ramp-300: #d4d4d8;
+  --ramp-400: #a1a1aa;
+  --ramp-500: #71717a;
+  --ramp-600: #52525b;
+  --ramp-700: #3f3f46;
+  --ramp-800: #27272a;
+  --ramp-900: #18181b;
+  --ramp-950: #09090b;
+
+  /* Mid-toned on purpose, so a single value carries both the light and the dark end of the
+     ramp without needing a pair. Each theme below picks its own. */
+  --accent: #ab73ba;
+
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+/* Custom properties inherit, so a theme that says nothing about the typeface would pick up
+   whichever one is in force further up — that's invisible at page level (only <html> is themed)
+   but wrong for the picker, where a Light swatch nested inside a Terminal page would come out
+   monospace. Resetting here, ahead of the two themes that do set --app-font, makes each themed
+   subtree start from the default regardless of what encloses it. */
+[data-theme] {
+  --app-font: Arial, Helvetica, sans-serif;
+}
+
+/* 70s printed paper: cream stock, sepia ink, burnt orange — set in a serif, since the typeface
+   does as much of the period work as the colours do. */
+[data-theme="retro"] {
+  --paper: #fdf6e3;
+  --ink: #241a0d;
+
+  --ramp-50: #f8efd8;
+  --ramp-100: #f2e5c6;
+  --ramp-200: #e6d4a9;
+  --ramp-300: #d2bb88;
+  --ramp-400: #9b8055;
+  --ramp-500: #7d6640;
+  --ramp-600: #64512f;
+  --ramp-700: #4e3e24;
+  --ramp-800: #3a2d1a;
+  --ramp-900: #2b2113;
+  --ramp-950: #1c150c;
+
+  --accent: #c2571e;
+
+  --background: #fdf6e3;
+  --foreground: #2b2113;
+
+  --app-font: Georgia, "Times New Roman", serif;
+}
+
+[data-theme="ocean"] {
+  --paper: #f4fafd;
+  --ink: #05202b;
+
+  --ramp-50: #e9f3f8;
+  --ramp-100: #dbecf3;
+  --ramp-200: #c2dce8;
+  --ramp-300: #9fc4d4;
+  --ramp-400: #5f8697;
+  --ramp-500: #4a6c7c;
+  --ramp-600: #3a5666;
+  --ramp-700: #2c4351;
+  --ramp-800: #20323d;
+  --ramp-900: #16242c;
+  --ramp-950: #0d171d;
+
+  --accent: #0f7c86;
+
+  --background: #f4fafd;
+  --foreground: #16242c;
+}
+
+[data-theme="sakura"] {
+  --paper: #fff7f9;
+  --ink: #2b1721;
+
+  --ramp-50: #fdeef3;
+  --ramp-100: #fbe1e9;
+  --ramp-200: #f6cbd8;
+  --ramp-300: #eaaabd;
+  --ramp-400: #a9748b;
+  --ramp-500: #8d5c72;
+  --ramp-600: #74495c;
+  --ramp-700: #5c3948;
+  --ramp-800: #452a37;
+  --ramp-900: #331e28;
+  --ramp-950: #21131a;
+
+  --accent: #d4467e;
+
+  --background: #fff7f9;
+  --foreground: #331e28;
+}
+
+/* Bone white on cold charcoal, everything faintly bruised red, and dried blood for the accent. */
+[data-theme="horror"] {
+  --paper: #ece2e0;
+  --ink: #070404;
+
+  --ramp-50: #ece2e0;
+  --ramp-100: #d9cbc9;
+  --ramp-200: #bda9a7;
+  --ramp-300: #9b8583;
+  --ramp-400: #857270;
+  --ramp-500: #6a5856;
+  --ramp-600: #514240;
+  --ramp-700: #3b2f2e;
+  --ramp-800: #291f1f;
+  --ramp-900: #1a1213;
+  --ramp-950: #0f0a0a;
+
+  /* Lighter than dried blood really wants to be: the accent also has to work as `text-accent`
+     on the near-black background (the playing track, the active tab), and anything darker
+     than this drops under a 3:1 ratio there. */
+  --accent: #c81e2a;
+
+  --background: #0c0808;
+  --foreground: #ece2e0;
+}
+
+[data-theme="synthwave"] {
+  --paper: #f7ecff;
+  --ink: #08031a;
+
+  --ramp-50: #f0e4ff;
+  --ramp-100: #ddcdf7;
+  --ramp-200: #c2ade9;
+  --ramp-300: #a289d1;
+  --ramp-400: #8670b4;
+  --ramp-500: #6c5896;
+  --ramp-600: #554278;
+  --ramp-700: #40315d;
+  --ramp-800: #2e2348;
+  --ramp-900: #1f1734;
+  --ramp-950: #140e24;
+
+  --accent: #e01a7f;
+
+  --background: #120a26;
+  --foreground: #f0e4ff;
+}
+
+/* Green phosphor CRT — monospace throughout, because half of what makes a terminal read as one
+   is that every glyph is the same width. */
+[data-theme="terminal"] {
+  --paper: #d7ffd7;
+  --ink: #000000;
+
+  --ramp-50: #d2ffd2;
+  --ramp-100: #b4f4b4;
+  --ramp-200: #8ede8e;
+  --ramp-300: #67c267;
+  --ramp-400: #4fa14f;
+  --ramp-500: #3f843f;
+  --ramp-600: #316a31;
+  --ramp-700: #255025;
+  --ramp-800: #193719;
+  --ramp-900: #0c1f0e;
+  --ramp-950: #061106;
+
+  --accent: #1f9d3a;
+
+  --background: #020a03;
+  --foreground: #b4f4b4;
+
+  --app-font: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Native widgets (range sliders, scrollbars, form controls) read this, not our variables — so
+   without it the EQ sliders stay light-mode grey inside Horror. */
+[data-scheme="light"] {
+  color-scheme: light;
+}
+
+[data-scheme="dark"] {
+  color-scheme: dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Themes that change the typeface do it through --app-font. `.theme-font` lets a subtree opt
+   into a *scoped* theme's font — the swatches in the theme picker, which set data-theme on
+   themselves and so must not inherit the page's font. */
+body,
+.theme-font {
+  font-family: var(--app-font, Arial, Helvetica, sans-serif);
 }
 
 /* Tailwind's preflight doesn't touch cursor, and browsers default <button> to the plain arrow
