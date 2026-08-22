@@ -33,6 +33,22 @@ const STRAND_PASSES = [
 
 export function MixGlow({ active }: { active: boolean }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const wrapperRef = useRef<HTMLSpanElement | null>(null);
+
+  // Whether the strands are out, written a frame late and as an attribute rather than as state.
+  //
+  // A frame late because an element that renders already-expanded has no earlier state to
+  // animate from: opening Now Playing mid-playback would pop the strands in at full size instead
+  // of sliding them out from behind the button. Rendering retracted and expanding on the next
+  // frame is what gives the browser two states to interpolate between.
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const frame = requestAnimationFrame(() => {
+      wrapper.dataset.shown = active ? "true" : "false";
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -78,6 +94,7 @@ export function MixGlow({ active }: { active: boolean }) {
 
   return (
     <span
+      ref={wrapperRef}
       aria-hidden="true"
       className={clsx(
         // Never intercepts the tap: it extends well past the button, and a glow that swallowed
@@ -86,9 +103,17 @@ export function MixGlow({ active }: { active: boolean }) {
         "pointer-events-none absolute inset-0 z-0 text-accent",
         // Retracts to just inside the button rather than to nothing: shrinking to zero reads as
         // the strands being sucked into a point, while stopping at the button's edge reads as
-        // them sliding in behind it, which is what's meant. The fade trails the scale.
-        "transition-[opacity,transform] ease-out motion-reduce:transition-none",
-        active ? "scale-100 opacity-100" : "scale-[0.72] opacity-0",
+        // them sliding out from behind it and back in, which is what's meant.
+        //
+        // The bare `transition` utility, not `transition-[opacity,transform]`: Tailwind v4
+        // compiles `scale-*` to the standalone CSS `scale` property rather than into `transform`,
+        // so naming `transform` transitions nothing and the strands snapped to size instead of
+        // growing out. `transition` covers opacity, scale and filter together.
+        "transition ease-out motion-reduce:transition-none",
+        // `scale-72`, not `scale-[0.72]`: the arbitrary form emits a bare `scale: .72` while the
+        // utility form emits percentages through --tw-scale-*, and interpolating one against the
+        // other is not something every engine does smoothly. Same form on both sides.
+        "scale-72 opacity-0 data-[shown=true]:scale-100 data-[shown=true]:opacity-100",
       )}
       style={{ transitionDuration: `${RETRACT_MS}ms` }}
     >

@@ -309,12 +309,14 @@ export function FullPlayer() {
           >
             <SkipBack className="h-5 w-5" />
           </button>
-          <span className="relative inline-flex">
+          {/* Extra room either side: the glow reaches half a button-width past the edge, and
+              without it the strands run into the skip buttons on a narrow screen. */}
+          <span className="relative mx-2 inline-flex">
             {isMixReady && isExpanded && <MixGlow active={isPlaying} />}
             <button
               onClick={togglePlay}
               disabled={!currentFile || isLoading}
-              className="relative z-10 rounded-full bg-zinc-900 p-4 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+              className="relative z-10 rounded-full bg-zinc-900 p-5 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
               aria-label={isPlaying ? "Pause" : "Play"}
             >
               <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />
