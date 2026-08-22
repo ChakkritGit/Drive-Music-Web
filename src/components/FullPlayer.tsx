@@ -17,6 +17,7 @@ import {
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
 import { PlayPauseIcon } from "@/components/PlayPauseIcon";
+import { MixGlow } from "@/components/MixGlow";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
@@ -67,6 +68,15 @@ export function FullPlayer() {
   const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
 
   const mixSummary = currentFile ? analysisSummary(analyses.get(currentFile.id)) : "";
+  // Whether the mix engine is set up for this track — both switches on, and something loaded.
+  // Crossfade is checked as well as auto mix because auto mix alone does nothing: it shapes a
+  // crossfade rather than being a transition of its own.
+  //
+  // Deliberately *not* gated on isPlaying, unlike the glow's own `active`: the glow has to stay
+  // mounted across a pause so it can animate itself away. It is gated on isExpanded, though —
+  // this view stays mounted when collapsed (see wasExpanded below), and an invisible animation
+  // driving requestAnimationFrame forever is pure battery.
+  const isMixReady = crossfadeEnabled && autoMixEnabled && currentFile !== null;
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
   const [showQueue, setShowQueue] = useState(false);
@@ -299,14 +309,17 @@ export function FullPlayer() {
           >
             <SkipBack className="h-5 w-5" />
           </button>
-          <button
-            onClick={togglePlay}
-            disabled={!currentFile || isLoading}
-            className="rounded-full bg-zinc-900 p-4 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
-            aria-label={isPlaying ? "Pause" : "Play"}
-          >
-            <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />
-          </button>
+          <span className="relative inline-flex">
+            {isMixReady && isExpanded && <MixGlow active={isPlaying} />}
+            <button
+              onClick={togglePlay}
+              disabled={!currentFile || isLoading}
+              className="relative z-10 rounded-full bg-zinc-900 p-4 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />
+            </button>
+          </span>
           <button
             onClick={next}
             disabled={!currentFile}
