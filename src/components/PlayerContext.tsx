@@ -19,14 +19,29 @@ import type {
   PlaybackSession,
   PlaySource,
   RecentSource,
+  TrackAnalysis,
 } from "@/types";
 import { downloadFile } from "@/lib/drive";
 import { parseTrackMetadata } from "@/lib/metadata";
 import { extractFeatures } from "@/lib/features";
 import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
 import { analyzeLoudnessGain } from "@/lib/loudness";
+import { analyzeTrack } from "@/lib/analysisClient";
+import {
+  AUTO_TRANSITION,
+  TRANSITION_FILTER,
+  beatAlignedStart,
+  curveValue,
+  isAutoTransition,
+  isConstantCurve,
+  resolveTransitionPlan,
+  type TransitionPlan,
+  type TransitionSettings,
+  type TransitionShape,
+} from "@/lib/transition";
 import {
   clampSpatialIntensity,
+  createHallImpulseResponse,
   createSpatialImpulseResponse,
   spatialGainsForIntensity,
 } from "@/lib/spatialAudio";
@@ -43,6 +58,12 @@ import {
   saveModel,
   savePlaybackSession,
   updateTrackLoudnessGain,
+  getTrackAnalysis,
+  putTrackAnalysis,
+  listTrackAnalyses,
+  listTransitionSettings,
+  putTransitionSettings,
+  transitionKey,
 } from "@/lib/db";
 
 const SESSION_SAVE_THROTTLE_MS = 5000;
@@ -66,6 +87,24 @@ const VISUALIZER_ENABLED_KEY = "drive-music-visualizer-enabled";
 const SPATIAL_AUDIO_ENABLED_KEY = "drive-music-spatial-audio-enabled";
 const SPATIAL_AUDIO_INTENSITY_KEY = "drive-music-spatial-audio-intensity";
 const DEFAULT_SPATIAL_AUDIO_INTENSITY = 50;
+const AUTO_MIX_ENABLED_KEY = "drive-music-auto-mix-enabled";
+const BEATMATCH_ENABLED_KEY = "drive-music-beatmatch-enabled";
+const AUTO_ANALYZE_ENABLED_KEY = "drive-music-auto-analyze-enabled";
+
+// How early a transition is prepared before the earliest moment it could start — long enough
+// for a download and a decode to finish, short enough that a prepared transition isn't sitting
+// armed for minutes while the user reorders the queue underneath it.
+const TRANSITION_ARM_LEAD_SECONDS = 10;
+// How long to wait before retrying a transition whose preparation failed (usually a download
+// that didn't complete), so a dead next-track doesn't get retried on every timeupdate.
+const TRANSITION_PREP_RETRY_MS = 10_000;
+// The longest a planned transition can be — the largest offered bar count at the slowest tempo
+// the analyzer will report. Used only to decide how early to start preparing.
+const MAX_PLANNED_TRANSITION_SECONDS = 16 * 4 * (60 / 70);
+// A preview plays a run-up into the mix and a little of the incoming track afterwards; without
+// them an audition starts mid-transition with no sense of what it's mixing out of.
+const PREVIEW_LEAD_IN_SECONDS = 3;
+const PREVIEW_TAIL_SECONDS = 3;
 
 export type LoopMode = "off" | "all" | "one";
 type AudioSlot = "A" | "B";
@@ -136,6 +175,50 @@ interface PlayerContextValue {
   spatialAudioIntensity: number;
   setSpatialAudioEnabled: (value: boolean) => void;
   setSpatialAudioIntensity: (value: number) => void;
+  /** Turns every automatic transition into a DJ-style mix — filter sweep, bass swap, a touch of
+   * reverb, started on a bar line at the outgoing track's outro — instead of a plain volume
+   * crossfade. Has no effect on its own: it changes what a crossfade *is*, so it needs
+   * `crossfadeEnabled` on to do anything. */
+  autoMixEnabled: boolean;
+  setAutoMixEnabled: (value: boolean) => void;
+  /** Nudges the incoming track's tempo to match the outgoing one across a transition. Only ever
+   * applies when both tempos are known and within MAXIMUM_TEMPO_STRETCH of each other. */
+  beatmatchEnabled: boolean;
+  setBeatmatchEnabled: (value: boolean) => void;
+  /** Whether to analyze the whole downloaded library in the background so tempo/key/mix points
+   * are ready before a transition needs them. Off by default — it's minutes of CPU across a
+   * large library, and the tracks that are actually about to play get analyzed on demand
+   * regardless of this setting. */
+  autoAnalyzeEnabled: boolean;
+  setAutoAnalyzeEnabled: (value: boolean) => void;
+  /** Tempo/key/waveform per track, for everything already analyzed on this device. */
+  analyses: Map<string, TrackAnalysis>;
+  /** Analyzes `file` if it hasn't been already (and is downloaded), publishing the result into
+   * `analyses`. Safe to call repeatedly — concurrent calls for the same track share one run. */
+  ensureAnalysis: (file: DriveFile) => Promise<TrackAnalysis | null>;
+  /** Progress of a running library-wide analysis, or null when none is running. */
+  trackAnalysisProgress: DownloadProgress | null;
+  /** Analyzes every downloaded track that hasn't been analyzed yet. */
+  analyzeAllTracks: () => Promise<void>;
+  /** The user's overrides for one ordered pair of tracks — AUTO_TRANSITION when they haven't
+   * touched it, which is every transition until they do. */
+  getTransition: (fromFileId: string, toFileId: string) => TransitionSettings;
+  /** Saves (or, for an all-defaults value, clears) the overrides for one pair. */
+  setTransition: (
+    fromFileId: string,
+    toFileId: string,
+    settings: TransitionSettings | null,
+  ) => Promise<void>;
+  /** True while the transition editor is auditioning a mix through the real audio graph. */
+  isPreviewingTransition: boolean;
+  /** Plays `from` into `to` using `settings`, exactly as the real transition would. Whatever is
+   * playing is displaced for the duration and restored afterwards. */
+  previewTransition: (
+    from: DriveFile,
+    to: DriveFile,
+    settings: TransitionSettings,
+  ) => Promise<void>;
+  stopTransitionPreview: () => void;
   /** A live 0..1 "how loud right now" reading from the shared analyser — not React state (see
    * its own definition for why), safe to call every animation frame. */
   getAudioLevel: () => number;
@@ -328,6 +411,139 @@ export function remapShuffleOrderAfterInsert(
   ];
 }
 
+/**
+ * Seeks `audio` to `seconds`, waiting for it to know its own duration first.
+ *
+ * Setting `currentTime` on an element that hasn't loaded metadata yet is silently dropped — the
+ * seek has nowhere to land. This is what stops a prepared transition from starting the incoming
+ * track at 0:00 instead of its mix-in point, and it resolves either way: an element that never
+ * loads is a transition that won't be armed, not a promise that never settles.
+ */
+async function seekWhenReady(audio: HTMLAudioElement, seconds: number): Promise<void> {
+  if (seconds <= 0) return;
+  await whenMetadataReady(audio);
+  // HAVE_METADATA. Duration and seekable ranges are known, which is all a seek needs.
+  if (audio.readyState >= 1) audio.currentTime = seconds;
+}
+
+/** Resolves once `audio` knows its duration — or once it's clear it never will. */
+function whenMetadataReady(audio: HTMLAudioElement): Promise<void> {
+  if (audio.readyState >= 1) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer = 0;
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      audio.removeEventListener("loadedmetadata", onReady);
+      audio.removeEventListener("error", onFailed);
+    };
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onFailed = () => {
+      cleanup();
+      resolve();
+    };
+    timer = window.setTimeout(onFailed, 5000);
+    audio.addEventListener("loadedmetadata", onReady);
+    audio.addEventListener("error", onFailed);
+  });
+}
+
+/**
+ * The per-slot half of the mix graph: everything a transition can move on *one* of the two
+ * tracks, sitting between that element's gain node and the shared EQ/limiter chain.
+ *
+ * Per slot rather than shared because a mix is precisely two tracks being treated differently
+ * at the same moment — the outgoing one filtered down and pushed into reverb while the incoming
+ * one opens up. A single shared filter can't express that. The mirror of PlaybackGraph's
+ * `filterA`/`filterB`/`slotReverbA`/`slotReverbB` on iOS.
+ */
+interface SlotChain {
+  highPass: BiquadFilterNode;
+  lowPass: BiquadFilterNode;
+  /** Low shelf for the bass swap. Deliberately separate from the pass filters: a high-pass
+   * removes the bottom of a track entirely, while the swap only wants to duck it. */
+  bass: BiquadFilterNode;
+  /** Wet/dry pair for this slot's transition reverb — Web Audio has no single "wetDryMix"
+   * property, so the blend is two gains that always sum to 1. */
+  dry: GainNode;
+  send: GainNode;
+  reverb: ConvolverNode;
+}
+
+function createSlotChain(ctx: AudioContext): SlotChain {
+  const highPass = ctx.createBiquadFilter();
+  highPass.type = "highpass";
+  highPass.frequency.value = TRANSITION_FILTER.openLowFrequency;
+
+  const lowPass = ctx.createBiquadFilter();
+  lowPass.type = "lowpass";
+  lowPass.frequency.value = TRANSITION_FILTER.openHighFrequency;
+
+  // Left in the path at 0dB rather than bypassed: 0dB is genuinely no change for a shelf, and
+  // connecting/disconnecting a node mid-swap is audible as a click.
+  const bass = ctx.createBiquadFilter();
+  bass.type = "lowshelf";
+  bass.frequency.value = 200;
+  bass.gain.value = 0;
+
+  const dry = ctx.createGain();
+  dry.gain.value = 1;
+  const send = ctx.createGain();
+  send.gain.value = 0;
+  const reverb = ctx.createConvolver();
+  reverb.buffer = createHallImpulseResponse(ctx);
+
+  return { highPass, lowPass, bass, dry, send, reverb };
+}
+
+function connectSlotChain(source: GainNode, chain: SlotChain, destination: AudioNode): void {
+  source.connect(chain.highPass).connect(chain.lowPass).connect(chain.bass);
+  chain.bass.connect(chain.dry).connect(destination);
+  chain.bass.connect(chain.send).connect(chain.reverb).connect(destination);
+}
+
+/** `position` is a lane value: 0 fully open (inaudible), 1 fully closed. */
+function applySlotLowPass(chain: SlotChain, position: number): void {
+  chain.lowPass.frequency.value =
+    position <= 0
+      ? TRANSITION_FILTER.openHighFrequency
+      : TRANSITION_FILTER.lowPassFrequency(position);
+}
+
+function applySlotHighPass(chain: SlotChain, position: number): void {
+  chain.highPass.frequency.value =
+    position <= 0
+      ? TRANSITION_FILTER.openLowFrequency
+      : TRANSITION_FILTER.highPassFrequency(position);
+}
+
+function applySlotBassGain(chain: SlotChain, db: number): void {
+  chain.bass.gain.value = Math.min(24, Math.max(-48, db));
+}
+
+/** 0..100, matching the lane's units (and AVAudioUnitReverb's `wetDryMix`, which is what the
+ * iOS version of this writes to). */
+function applySlotReverb(chain: SlotChain, wetDryMix: number): void {
+  const wet = Math.min(100, Math.max(0, wetDryMix)) / 100;
+  chain.send.gain.value = wet;
+  chain.dry.gain.value = 1 - wet;
+}
+
+/** Returns a slot to "does nothing". Both slots get this at the end of every transition — the
+ * incoming one because it's now just playing normally, the outgoing one because it's about to
+ * be reused for whatever comes next and would otherwise inherit this transition's closed
+ * low-pass. */
+function resetSlotChain(chain: SlotChain | null): void {
+  if (!chain) return;
+  chain.highPass.frequency.value = TRANSITION_FILTER.openLowFrequency;
+  chain.lowPass.frequency.value = TRANSITION_FILTER.openHighFrequency;
+  chain.bass.gain.value = 0;
+  chain.dry.gain.value = 1;
+  chain.send.gain.value = 0;
+}
+
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const { showToast } = useToast();
@@ -349,18 +565,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Routes both audio elements through a shared Web Audio graph:
-  //   sourceA → gainA ⎫                              ⎧→ spatialDryGain ⎫
-  //                    ⎬→ eqBass → eqMid → eqTreble → ⎨                 ⎬→ compressor → analyser → destination
-  //   sourceB → gainB ⎭                              ⎩→ spatialConvolver → spatialWetGain ⎭
-  // Each element gets its own GainNode (needed so the crossfade ramp can control them
-  // independently — see startCrossfade/advanceCrossfadeRamp); everything downstream of that
-  // merge point is shared, since EQ/limiting/analysis apply to "whatever's audible right now"
-  // regardless of which element that currently is. GainNode is also what lets volume
-  // normalization *boost* a quiet track above 1.0 — HTMLMediaElement.volume alone caps at 1.0,
-  // so it can only ever turn loud tracks down (see src/lib/loudness.ts).
+  //   sourceA → gainA → chainA ⎫                              ⎧→ spatialDryGain ⎫
+  //                             ⎬→ eqBass → eqMid → eqTreble → ⎨                 ⎬→ compressor → analyser → destination
+  //   sourceB → gainB → chainB ⎭                              ⎩→ spatialConvolver → spatialWetGain ⎭
+  // Each element gets its own GainNode (needed so the transition ramp can control them
+  // independently — see advanceCrossfadeRamp) followed by its own SlotChain (the filters, bass
+  // shelf and reverb a mix moves per track); everything downstream of that merge point is
+  // shared, since EQ/limiting/analysis apply to "whatever's audible right now" regardless of
+  // which element that currently is. GainNode is also what lets volume normalization *boost* a
+  // quiet track above 1.0 — HTMLMediaElement.volume alone caps at 1.0, so it can only ever turn
+  // loud tracks down (see src/lib/loudness.ts).
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainARef = useRef<GainNode | null>(null);
   const gainBRef = useRef<GainNode | null>(null);
+  const chainARef = useRef<SlotChain | null>(null);
+  const chainBRef = useRef<SlotChain | null>(null);
   const eqBassRef = useRef<BiquadFilterNode | null>(null);
   const eqMidRef = useRef<BiquadFilterNode | null>(null);
   const eqTrebleRef = useRef<BiquadFilterNode | null>(null);
@@ -401,6 +620,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const gainB = ctx.createGain();
     ctx.createMediaElementSource(audioB).connect(gainB);
     gainBRef.current = gainB;
+
+    const chainA = createSlotChain(ctx);
+    chainARef.current = chainA;
+    const chainB = createSlotChain(ctx);
+    chainBRef.current = chainB;
 
     const eqBass = ctx.createBiquadFilter();
     eqBass.type = "lowshelf";
@@ -444,8 +668,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     analyserDataRef.current = new Uint8Array(analyser.frequencyBinCount);
     analyserRef.current = analyser;
 
-    gainA.connect(eqBass);
-    gainB.connect(eqBass);
+    connectSlotChain(gainA, chainA, eqBass);
+    connectSlotChain(gainB, chainB, eqBass);
     eqBass.connect(eqMid).connect(eqTreble);
     eqTreble.connect(spatialDryGain);
     eqTreble.connect(spatialConvolver);
@@ -464,6 +688,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!audio) return null;
     if (audio === audioARef.current) return gainARef.current;
     if (audio === audioBRef.current) return gainBRef.current;
+    return null;
+  }, []);
+
+  const getSlotChain = useCallback((audio: HTMLAudioElement | null): SlotChain | null => {
+    if (!audio) return null;
+    if (audio === audioARef.current) return chainARef.current;
+    if (audio === audioBRef.current) return chainBRef.current;
     return null;
   }, []);
 
@@ -498,7 +729,58 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     incomingTargetVolume: number;
     incomingGain: GainNode;
     outgoingGain: GainNode;
+    // Every automation lane of this transition. The ramp's own job is only to advance `t` and
+    // hand each lane's value to the right node; what a transition *sounds* like lives entirely
+    // in the shape, which is what lets the editor build arbitrary ones.
+    shape: TransitionShape;
+    outgoingChain: SlotChain | null;
+    incomingChain: SlotChain | null;
+    outgoingAudio: HTMLAudioElement | null;
+    incomingAudio: HTMLAudioElement | null;
+    /** The stretch of the outgoing track to hold under the transition, if the shape asks. */
+    loop: { start: number; end: number } | null;
+    /** A preview runs the identical ramp but commits nothing — see previewTransition. */
+    isPreview: boolean;
   } | null>(null);
+  // A transition that's fully prepared (next track downloaded, decoded into the idle element,
+  // seeked to its mix-in point, silent) and waiting for its moment. Split from starting it so
+  // that nothing between "now is the moment" and the ramp beginning can go asynchronous.
+  const armedTransitionRef = useRef<{
+    targetIndex: number;
+    targetFile: DriveFile;
+    plan: TransitionPlan;
+    /** Where on the outgoing track's clock the mix should begin, or null for "as soon as the
+     * remaining time is down to the transition's own length". */
+    startAtSeconds: number | null;
+    incomingTargetVolume: number;
+  } | null>(null);
+  // Several timeupdates land during the download/decode that arming does, and
+  // `armedTransitionRef` isn't assigned until it finishes.
+  const armingTransitionRef = useRef(false);
+  // Where the transition out of the *current* track should begin — a hand-placed marker, or the
+  // outro that analysis found. Read by the arming trigger, which otherwise only knows how to
+  // prepare "near the end of the track": a mix-out point a minute before the end would have
+  // gone past long before anything was prepared.
+  const upcomingTransitionStartRef = useRef<number | null>(null);
+  // Tracks whose preparation failed recently (a download that didn't complete), so a dead next
+  // track isn't retried on every timeupdate.
+  const transitionPrepFailuresRef = useRef<Map<string, number>>(new Map());
+  // Bumped whenever a prepared (or preparing) transition is thrown away, so an arm task that
+  // was mid-download when that happened knows not to install itself.
+  const armGenerationRef = useRef(0);
+  // Set below, once everything a preview has to restore exists. Called from cancelCrossfade,
+  // which is defined long before it.
+  const endPreviewRef = useRef<(() => void) | null>(null);
+  // A preview's two timers: the run-up before the mix starts, and the tail after it finishes.
+  const previewLeadTimerRef = useRef(0);
+  const previewTailTimerRef = useRef(0);
+  // What was playing before a preview displaced it, so it can be put back.
+  const suspendedPlaybackRef = useRef<{
+    fileId: string;
+    progress: number;
+    wasPlaying: boolean;
+  } | null>(null);
+  const previewUrlsRef = useRef<string[]>([]);
   // Set right before setCurrentIndex() at the end of a crossfade, so the load effect can tell
   // "this transition was already faded in on the other element" apart from a normal load.
   const crossfadeCommittedForRef = useRef<string | null>(null);
@@ -556,6 +838,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [spatialAudioIntensity, setSpatialAudioIntensityState] = useState(
     DEFAULT_SPATIAL_AUDIO_INTENSITY,
   );
+  const [autoMixEnabled, setAutoMixEnabledState] = useState(false);
+  const [beatmatchEnabled, setBeatmatchEnabledState] = useState(true);
+  const [autoAnalyzeEnabled, setAutoAnalyzeEnabledState] = useState(false);
+  const [analyses, setAnalyses] = useState<Map<string, TrackAnalysis>>(new Map());
+  const [transitions, setTransitions] = useState<Map<string, TransitionSettings>>(new Map());
+  const [trackAnalysisProgress, setTrackAnalysisProgress] = useState<DownloadProgress | null>(
+    null,
+  );
+  const [isPreviewingTransition, setIsPreviewingTransition] = useState(false);
+  // Mirrors of the two maps above for the engine, which reads them from inside async tasks and
+  // rAF callbacks where a captured render's copy would be stale by the time it's used.
+  const analysesRef = useRef<Map<string, TrackAnalysis>>(analyses);
+  const transitionsRef = useRef<Map<string, TransitionSettings>>(transitions);
+  const isPreviewingRef = useRef(false);
 
   useEffect(() => {
     const storedGapless = localStorage.getItem(GAPLESS_ENABLED_KEY);
@@ -589,6 +885,31 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (Number.isFinite(storedSpatialIntensity)) {
       setSpatialAudioIntensityState(clampSpatialIntensity(storedSpatialIntensity));
     }
+    const storedAutoMix = localStorage.getItem(AUTO_MIX_ENABLED_KEY);
+    if (storedAutoMix !== null) setAutoMixEnabledState(storedAutoMix === "true");
+    const storedBeatmatch = localStorage.getItem(BEATMATCH_ENABLED_KEY);
+    if (storedBeatmatch !== null) setBeatmatchEnabledState(storedBeatmatch === "true");
+    const storedAutoAnalyze = localStorage.getItem(AUTO_ANALYZE_ENABLED_KEY);
+    if (storedAutoAnalyze !== null) setAutoAnalyzeEnabledState(storedAutoAnalyze === "true");
+  }, []);
+
+  // Everything analyzed on a previous visit, and every transition the user has edited. Both are
+  // small (a few hundred bytes each) and read all at once, since a playlist screen wants every
+  // transition in it and the admin screen wants the whole library's analyses.
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([listTrackAnalyses(), listTransitionSettings()]).then(
+      ([storedAnalyses, storedTransitions]) => {
+        if (cancelled) return;
+        analysesRef.current = storedAnalyses;
+        transitionsRef.current = storedTransitions;
+        setAnalyses(storedAnalyses);
+        setTransitions(storedTransitions);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const setGaplessEnabled = useCallback((value: boolean) => {
@@ -651,6 +972,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(SPATIAL_AUDIO_INTENSITY_KEY, String(clamped));
   }, []);
 
+  const setAutoMixEnabled = useCallback((value: boolean) => {
+    setAutoMixEnabledState(value);
+    localStorage.setItem(AUTO_MIX_ENABLED_KEY, String(value));
+  }, []);
+
+  const setBeatmatchEnabled = useCallback((value: boolean) => {
+    setBeatmatchEnabledState(value);
+    localStorage.setItem(BEATMATCH_ENABLED_KEY, String(value));
+  }, []);
+
+  const setAutoAnalyzeEnabled = useCallback((value: boolean) => {
+    setAutoAnalyzeEnabledState(value);
+    localStorage.setItem(AUTO_ANALYZE_ENABLED_KEY, String(value));
+  }, []);
+
   // Applies the EQ settings to the actual filter nodes — when off, every band is forced to 0dB
   // (flat) regardless of the stored slider values, rather than disconnecting the nodes.
   useEffect(() => {
@@ -673,21 +1009,35 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     wet.gain.value = gains.wet;
   }, [spatialAudioEnabled, spatialAudioIntensity]);
 
-  // Aborts an in-progress crossfade — restores the active element to full volume (abandoning
-  // the fade-out) and resets the inactive one, so a manual skip/seek/pause mid-fade cuts
-  // cleanly instead of leaving either element stuck at a partial volume.
+  // Aborts an in-progress transition — restores the active element to full volume (abandoning
+  // the fade-out) and resets the inactive one, so a manual skip/seek/pause mid-mix cuts
+  // cleanly instead of leaving either element stuck at a partial volume behind a half-closed
+  // filter.
   const cancelCrossfade = useCallback(() => {
-    // A pre-buffered gapless track is invalidated by every one of this function's callers
-    // (skip, seek, pause, queue edit): what plays next, or where the current track is, has
-    // just changed. Cleared before the early return below, since arming one doesn't create
-    // any crossfade state.
+    // An audition is playing something that isn't the queue, and every one of this function's
+    // callers means the user has moved on from it. Held in a ref because endPreview is defined
+    // far below this — it needs most of the player to exist first.
+    if (isPreviewingRef.current) endPreviewRef.current?.();
+
+    // A pre-buffered gapless track, or a fully prepared transition, is invalidated by every one
+    // of this function's callers (skip, seek, pause, queue edit): what plays next, or where the
+    // current track is, has just changed. Cleared before the early return below, since arming
+    // one doesn't create any crossfade state.
     const armed = gaplessArmedRef.current;
     gaplessArmedRef.current = null;
-    if (armed) {
+    const armedTransition = armedTransitionRef.current;
+    armedTransitionRef.current = null;
+    // Also disowns an arm that's still downloading/decoding: it checks this counter before
+    // assigning itself, so a task in flight when the queue changed can't arm afterwards.
+    armGenerationRef.current += 1;
+    if (armed || armedTransition) {
       const idle = getInactiveAudio();
       if (idle) {
         idle.pause();
         idle.removeAttribute("src");
+        // The stretch only ever existed to hold two tempos together across a mix that is now
+        // not happening; leaving it on would play the next track at the wrong speed.
+        idle.playbackRate = 1;
         idle.load();
       }
       if (fadeObjectUrlRef.current) {
@@ -698,6 +1048,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const state = crossfadeStateRef.current;
     if (!state) return;
     crossfadeStateRef.current = null;
+    // Both slots, not just the surviving one — an abandoned mix leaves a partly-closed filter
+    // and a partly-swapped bass shelf on each, and the silenced slot's would still be there the
+    // next time it's used.
+    resetSlotChain(chainARef.current);
+    resetSlotChain(chainBRef.current);
     const active = getActiveAudio();
     const activeGain = getGainNode(active);
     if (activeGain) {
@@ -713,6 +1068,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (inactive) {
       inactive.pause();
       inactive.removeAttribute("src");
+      inactive.playbackRate = 1;
       inactive.load();
     }
     if (fadeObjectUrlRef.current) {
@@ -821,6 +1177,114 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         });
     },
     [refreshCachedTracks, currentFile, volume, volumeNormalizationEnabled, getActiveAudio, getGainNode],
+  );
+
+  /** Publishes an analysis into both the render-visible map and the engine's mirror of it. */
+  const rememberAnalysis = useCallback((analysis: TrackAnalysis) => {
+    const next = new Map(analysesRef.current);
+    next.set(analysis.fileId, analysis);
+    analysesRef.current = next;
+    setAnalyses(next);
+  }, []);
+
+  // In-flight analyses, keyed by file id. Analysis is seconds of CPU, and the same track is
+  // routinely asked for from two places at once (the editor opening while the player prepares a
+  // transition into it) — sharing the run is the difference between one decode and two.
+  const analysisTasksRef = useRef<Map<string, Promise<TrackAnalysis | null>>>(new Map());
+
+  /**
+   * Tempo, key, mix points and waveform for `file` — from memory, then from IndexedDB, then by
+   * actually analyzing the downloaded audio.
+   *
+   * Returns null for a track that isn't downloaded: analysis reads the decoded file, so there's
+   * nothing to read. (Streaming it just to analyze it would spend the user's bandwidth on a
+   * track they may never play.)
+   */
+  const ensureAnalysis = useCallback(
+    async (file: DriveFile): Promise<TrackAnalysis | null> => {
+      const known = analysesRef.current.get(file.id);
+      if (known) return known;
+
+      const inFlight = analysisTasksRef.current.get(file.id);
+      if (inFlight) return inFlight;
+
+      const task = (async () => {
+        const stored = await getTrackAnalysis(file.id);
+        if (stored) {
+          rememberAnalysis(stored);
+          return stored;
+        }
+        const cached = await getCachedTrack(file.id);
+        if (!cached) return null;
+        const analysis = await analyzeTrack(file.id, cached.blob);
+        if (!analysis) return null;
+        await putTrackAnalysis(analysis);
+        rememberAnalysis(analysis);
+        return analysis;
+      })().finally(() => {
+        analysisTasksRef.current.delete(file.id);
+      });
+
+      analysisTasksRef.current.set(file.id, task);
+      return task;
+    },
+    [rememberAnalysis],
+  );
+
+  /**
+   * Analyzes every downloaded track that hasn't been analyzed yet, one at a time with a visible
+   * progress count.
+   *
+   * Serialized deliberately: analysis is CPU-bound in a single worker, so four at once finish no
+   * sooner and compete with playback for the same cores.
+   */
+  const analyzeAllTracks = useCallback(async () => {
+    const targets = Array.from(cachedTracks.values()).filter(
+      (track) => !analysesRef.current.has(track.fileId),
+    );
+    if (targets.length === 0) return;
+
+    setTrackAnalysisProgress({ done: 0, total: targets.length });
+    for (let i = 0; i < targets.length; i++) {
+      await ensureAnalysis(targets[i].driveMeta);
+      setTrackAnalysisProgress({ done: i + 1, total: targets.length });
+    }
+    setTrackAnalysisProgress(null);
+  }, [cachedTracks, ensureAnalysis]);
+
+  // The background catch-up scan, off unless the user asks for it (see autoAnalyzeEnabled).
+  // Runs once per session; new downloads are covered by the on-demand analysis the transition
+  // arming does.
+  const trackAnalysisScanStartedRef = useRef(false);
+  useEffect(() => {
+    if (trackAnalysisScanStartedRef.current) return;
+    if (!autoAnalyzeEnabled || cachedTracks.size === 0) return;
+    trackAnalysisScanStartedRef.current = true;
+    // Guarded by the ref above so it only ever fires once per session.
+    void analyzeAllTracks();
+  }, [autoAnalyzeEnabled, cachedTracks, analyzeAllTracks]);
+
+  /** The user's overrides for one ordered pair — A→B is a different transition from B→A. */
+  const getTransition = useCallback(
+    (fromFileId: string, toFileId: string): TransitionSettings =>
+      transitions.get(transitionKey(fromFileId, toFileId)) ?? AUTO_TRANSITION,
+    [transitions],
+  );
+
+  const setTransition = useCallback(
+    async (fromFileId: string, toFileId: string, settings: TransitionSettings | null) => {
+      // An all-defaults override is the same as no override — storing it would grow the store
+      // with entries that say nothing and make "is this one customized?" wrong in the UI.
+      const value = settings && !isAutoTransition(settings) ? settings : null;
+      const key = transitionKey(fromFileId, toFileId);
+      const next = new Map(transitionsRef.current);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      transitionsRef.current = next;
+      setTransitions(next);
+      await putTransitionSettings(fromFileId, toFileId, value);
+    },
+    [],
   );
 
   // Loads (from cache, or downloads + caches + parses) and plays whenever the current file changes.
@@ -1336,6 +1800,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [getInactiveAudio, getGainNode, volume, trackGain, playNextIndex]);
 
   const handleEnded = useCallback(() => {
+    // A preview's own tracks reaching their end is the preview's business, not the queue's.
+    if (isPreviewingRef.current) return;
     // A crossfade already committed this transition (setCurrentIndex was called as the ramp
     // finished) — the native `ended` event firing moments later on the demoted element (if
     // timing was tight) shouldn't also run the normal end-of-track logic below.
@@ -1440,11 +1906,54 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return (currentIndex + 1) % queue.length;
   }, [queue, currentIndex, loopMode, playNextIndex, shuffle, resolveShuffleOrder]);
 
-  // Applies the crossfade ramp's volume for "right now" (a pure function of wall-clock
+  /**
+   * Re-reads where the transition out of the current track should begin.
+   *
+   * This is what decides when preparation *starts*, so it has to know about a mix-out point just
+   * as much as beatAlignedStart does: a track whose outro begins a minute before the end would
+   * otherwise arm on the "near the end" fallback window, by which point the mix-out point has
+   * long since gone past and the transition fires late — at exactly the end-of-track position
+   * this is meant to move away from.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    upcomingTransitionStartRef.current = null;
+    if (!currentFile || !crossfadeEnabled) return;
+    const targetIndex = peekNextIndex();
+    if (targetIndex === null) return;
+    const target = queue[targetIndex];
+    if (!target) return;
+
+    // A hand-placed start wins outright — it's a decision, not a suggestion.
+    const chosen = transitions.get(transitionKey(currentFile.id, target.id))?.outgoingStartSeconds;
+    if (chosen !== undefined) {
+      upcomingTransitionStartRef.current = chosen;
+      return;
+    }
+    // Otherwise the outro, which only auto mix has a use for and only analysis can find.
+    if (!autoMixEnabled) return;
+    const known = analysesRef.current.get(currentFile.id);
+    if (known) {
+      upcomingTransitionStartRef.current = known.mixOutSeconds ?? null;
+      return;
+    }
+    // Analyzed on demand for the same reason the incoming track is: this runs at load time with
+    // the whole track ahead of it, and without it the feature that's switched on silently does
+    // nothing on a library that was never analyzed.
+    void ensureAnalysis(currentFile).then((analysis) => {
+      if (cancelled || !analysis) return;
+      upcomingTransitionStartRef.current = analysis.mixOutSeconds ?? null;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFile, queue, crossfadeEnabled, autoMixEnabled, transitions, peekNextIndex, ensureAnalysis]);
+
+  // Applies every automation lane's value for "right now" (a pure function of wall-clock
   // elapsed time, not an incremental step), and commits the transition once it completes.
   // Called from both a requestAnimationFrame loop (smooth while the tab is foregrounded) and
   // every `timeupdate` (see handleTimeUpdate) — rAF gets throttled or fully suspended in a
-  // backgrounded tab, which would otherwise freeze the fade indefinitely (or strand the
+  // backgrounded tab, which would otherwise freeze the mix indefinitely (or strand the
   // incoming track at a partial volume) the moment the user switches tabs. `timeupdate` fires
   // off actual audio playback instead, so it keeps the ramp correct regardless of tab
   // visibility; calling this twice for the same moment is harmless since it's idempotent.
@@ -1452,56 +1961,113 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const state = crossfadeStateRef.current;
     if (!state) return;
     const t = Math.min(1, (performance.now() - state.startTime) / state.durationMs);
-    state.incomingGain.gain.value = state.incomingTargetVolume * t;
-    state.outgoingGain.gain.value = state.outgoingStartVolume * (1 - t);
-    if (t >= 1) {
-      crossfadeStateRef.current = null;
-      crossfadeCommittedForRef.current = state.targetFile.id;
-      if (playNextIndex === state.targetIndex) setPlayNextIndex(null);
-      setCurrentIndex(state.targetIndex);
+    const shape = state.shape;
+
+    // Scaled by whatever each slot was already at, not set absolutely — those levels carry the
+    // user's volume and each track's normalization gain, and a transition has no business
+    // discarding either.
+    state.outgoingGain.gain.value =
+      state.outgoingStartVolume * curveValue(shape.outgoingVolume, t);
+    state.incomingGain.gain.value =
+      state.incomingTargetVolume * curveValue(shape.incomingVolume, t);
+
+    // Constant lanes are skipped rather than written every frame. Most transitions leave most
+    // lanes flat (a plain fade moves two of seven), and re-assigning an unchanged value to an
+    // AudioParam is pure overhead.
+    const outgoingChain = state.outgoingChain;
+    if (outgoingChain) {
+      if (!isConstantCurve(shape.outgoingLowPass)) {
+        applySlotLowPass(outgoingChain, curveValue(shape.outgoingLowPass, t));
+      }
+      if (!isConstantCurve(shape.outgoingBass)) {
+        applySlotBassGain(outgoingChain, curveValue(shape.outgoingBass, t));
+      }
+      if (!isConstantCurve(shape.outgoingReverb)) {
+        applySlotReverb(outgoingChain, curveValue(shape.outgoingReverb, t));
+      }
     }
+    const incomingChain = state.incomingChain;
+    if (incomingChain) {
+      if (!isConstantCurve(shape.incomingHighPass)) {
+        applySlotHighPass(incomingChain, curveValue(shape.incomingHighPass, t));
+      }
+      if (!isConstantCurve(shape.incomingBass)) {
+        applySlotBassGain(incomingChain, curveValue(shape.incomingBass, t));
+      }
+    }
+
+    // Holds the outgoing track's last bar(s) under the transition when the shape asks for it —
+    // how a DJ stretches a phrase to buy time for the next track to arrive on a downbeat.
+    //
+    // Deviation from the iOS version, which schedules the loop as consecutive sample-accurate
+    // segments on an AVAudioPlayerNode: an <audio> element has no segment API, so this seeks
+    // the element back instead, and the seek is audible as a small break in the loop rather
+    // than a seamless join.
+    const loop = state.loop;
+    if (loop && state.outgoingAudio && state.outgoingAudio.currentTime >= loop.end) {
+      state.outgoingAudio.currentTime = loop.start;
+    }
+
+    if (t < 1) return;
+
+    crossfadeStateRef.current = null;
+    // Both slots leave a transition unfiltered — the incoming one because it's now just playing
+    // normally, the outgoing one because it's about to be reused for whatever comes next.
+    resetSlotChain(state.outgoingChain);
+    resetSlotChain(state.incomingChain);
+    // The stretch existed only to hold the two tempos together while they overlapped; once the
+    // outgoing track is gone there's nothing left to match, and carrying it on would play the
+    // rest of this track at the wrong speed.
+    if (state.incomingAudio) state.incomingAudio.playbackRate = 1;
+
+    if (state.isPreview) {
+      // An audition doesn't change what's playing; the tail is what ends it.
+      previewTailTimerRef.current = window.setTimeout(
+        () => endPreviewRef.current?.(),
+        PREVIEW_TAIL_SECONDS * 1000,
+      );
+      return;
+    }
+
+    crossfadeCommittedForRef.current = state.targetFile.id;
+    if (playNextIndex === state.targetIndex) setPlayNextIndex(null);
+    setCurrentIndex(state.targetIndex);
   }, [playNextIndex]);
 
-  // Starts fading `outgoing` out while the (already cached) next track fades in on the other
-  // element. Only ever called with a target whose blob is already in memory — an uncached
-  // next track just falls through to the normal onEnded-driven load, no crossfade attempted.
-  const startCrossfade = useCallback(
-    (targetIndex: number, outgoing: HTMLAudioElement) => {
-      const targetFile = queue[targetIndex];
-      const cached = cachedTracks.get(targetFile?.id ?? "");
-      const incoming = getInactiveAudio();
-      const incomingGain = getGainNode(incoming);
-      const outgoingGain = getGainNode(outgoing);
-      if (!targetFile || !cached || !incoming || !incomingGain || !outgoingGain) return;
-
-      if (fadeObjectUrlRef.current) URL.revokeObjectURL(fadeObjectUrlRef.current);
-      const url = URL.createObjectURL(cached.blob);
-      fadeObjectUrlRef.current = url;
-      incoming.src = url;
-      incoming.currentTime = 0;
-      incomingGain.gain.value = 0;
-      void tryPlay(incoming, audioContextRef.current);
-
-      // Never let the ramp outlast the outgoing track — `timeupdate` doesn't tick every
-      // frame, so by the time this fires the real time left can already be a bit under
-      // `crossfadeSeconds`. A ramp that runs past the track's natural end means the browser's
-      // own end-of-media `pause` event fires while the ramp is still going, which (see
-      // handlePause) would otherwise be misread as the user pausing and cancel the fade.
-      const remaining = outgoing.duration - outgoing.currentTime;
-      const durationMs = Math.max(0.01, Math.min(crossfadeSeconds, remaining)) * 1000;
-
+  /** Starts the ramp. Everything it needs has already been decided and prepared by the caller —
+   * this is deliberately the only synchronous, no-decisions step of a transition. */
+  const beginTransitionRamp = useCallback(
+    (options: {
+      plan: TransitionPlan;
+      targetIndex: number;
+      targetFile: DriveFile;
+      outgoing: HTMLAudioElement;
+      incoming: HTMLAudioElement;
+      outgoingGain: GainNode;
+      incomingGain: GainNode;
+      incomingTargetVolume: number;
+      durationSeconds: number;
+      isPreview: boolean;
+    }) => {
       crossfadeStateRef.current = {
         startTime: performance.now(),
-        durationMs,
-        targetIndex,
-        targetFile,
+        durationMs: options.durationSeconds * 1000,
+        targetIndex: options.targetIndex,
+        targetFile: options.targetFile,
         // The outgoing gain node's current value already reflects its own normalization gain
         // (set when it started playing) — ramping proportionally down from there, not from
         // `volume` directly, keeps that gain intact through the fade-out.
-        outgoingStartVolume: outgoingGain.gain.value,
-        incomingTargetVolume: volume * trackGain(targetFile.id),
-        incomingGain,
-        outgoingGain,
+        outgoingStartVolume: options.outgoingGain.gain.value,
+        incomingTargetVolume: options.incomingTargetVolume,
+        incomingGain: options.incomingGain,
+        outgoingGain: options.outgoingGain,
+        shape: options.plan.shape,
+        outgoingChain: getSlotChain(options.outgoing),
+        incomingChain: getSlotChain(options.incoming),
+        outgoingAudio: options.outgoing,
+        incomingAudio: options.incoming,
+        loop: options.plan.outgoingLoop,
+        isPreview: options.isPreview,
       };
 
       const tick = () => {
@@ -1511,17 +2077,381 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       };
       requestAnimationFrame(tick);
     },
+    [advanceCrossfadeRamp, getSlotChain],
+  );
+
+  /**
+   * Prepares the transition out of the currently-playing track: downloads the next one if
+   * needed, analyzes it if auto mix is on, resolves the plan, and parks the decoded audio on the
+   * idle element at its mix-in point, silent.
+   *
+   * Split from starting it (see startArmedTransitionIfDue) so that nothing between "now is the
+   * moment" and the ramp beginning can go asynchronous — a mix that starts a downloadel late is
+   * a mix that starts off the beat.
+   */
+  const armTransition = useCallback(
+    (outgoing: HTMLAudioElement) => {
+      if (armedTransitionRef.current || armingTransitionRef.current) return;
+      if (crossfadeStateRef.current) return;
+
+      const position = outgoing.currentTime;
+      const trackDuration = outgoing.duration;
+      if (!Number.isFinite(trackDuration) || trackDuration <= 0) return;
+
+      // Two ways to become due. A hand-placed start (or a detected outro) can sit anywhere in
+      // the track, so it gets its own trigger — a short lead before the chosen moment.
+      // Everything else falls back to "near the end", sized for the longest transition a bar
+      // count can ask for rather than for the crossfade slider's value.
+      const chosenStart = upcomingTransitionStartRef.current;
+      const armWindow = Math.max(crossfadeSeconds, MAX_PLANNED_TRANSITION_SECONDS) + 2;
+      const isDue =
+        chosenStart !== null
+          ? position >= chosenStart - TRANSITION_ARM_LEAD_SECONDS
+          : trackDuration - position <= armWindow;
+      if (!isDue) return;
+
+      const targetIndex = peekNextIndex();
+      if (targetIndex === null) return;
+      const targetFile = queue[targetIndex];
+      if (!targetFile) return;
+
+      const failedAt = transitionPrepFailuresRef.current.get(targetFile.id);
+      if (failedAt !== undefined && Date.now() - failedAt < TRANSITION_PREP_RETRY_MS) return;
+      transitionPrepFailuresRef.current.delete(targetFile.id);
+
+      const incoming = getInactiveAudio();
+      const incomingGain = getGainNode(incoming);
+      if (!incoming || !incomingGain) return;
+
+      const generation = armGenerationRef.current;
+      const outgoingFile = currentIndex !== null ? queue[currentIndex] : undefined;
+      armingTransitionRef.current = true;
+
+      void (async () => {
+        try {
+          const track = await ensureCached(targetFile, session?.accessToken);
+          await refreshCachedTracks();
+          if (generation !== armGenerationRef.current) return;
+
+          // The incoming track's analysis is what supplies its mix-in point — where the
+          // arrangement actually arrives — and without it the plan falls back to 0:00, which is
+          // the second track starting at its very top over the first one's outro. Analyzed on
+          // demand when auto mix is on, regardless of autoAnalyzeEnabled: that setting opts out
+          // of grinding through the whole library in the background, whereas this is one track,
+          // the one about to play, and skipping it means the feature that's switched on doesn't
+          // work. The outgoing track is left cache-only — it's already playing, so there's
+          // nothing to wait on if it wasn't analyzed in time.
+          let incomingAnalysis = analysesRef.current.get(targetFile.id) ?? null;
+          if (!incomingAnalysis && autoMixEnabled) {
+            incomingAnalysis = await ensureAnalysis(targetFile);
+            if (generation !== armGenerationRef.current) return;
+          }
+          const outgoingAnalysis = outgoingFile
+            ? (analysesRef.current.get(outgoingFile.id) ?? null)
+            : null;
+          const settings = outgoingFile
+            ? (transitionsRef.current.get(transitionKey(outgoingFile.id, targetFile.id)) ??
+              AUTO_TRANSITION)
+            : AUTO_TRANSITION;
+
+          const plan = resolveTransitionPlan({
+            settings,
+            outgoing: outgoingAnalysis,
+            incoming: incomingAnalysis,
+            outgoingDuration: Number.isFinite(outgoing.duration) ? outgoing.duration : null,
+            fallbackDuration: crossfadeSeconds,
+            autoMixEnabled,
+            beatmatchEnabledByDefault: beatmatchEnabled,
+          });
+
+          if (fadeObjectUrlRef.current) URL.revokeObjectURL(fadeObjectUrlRef.current);
+          const url = URL.createObjectURL(track.blob);
+          fadeObjectUrlRef.current = url;
+          // Silent until the ramp starts. It's loaded and positioned but not playing, so a
+          // prepared transition the user skips past costs nothing audible.
+          incomingGain.gain.value = 0;
+          incoming.src = url;
+          // Tempo matching without pitch shifting, the same trade AVAudioUnitTimePitch makes on
+          // iOS — `preservesPitch` is the default, and is set explicitly because it is the whole
+          // reason this is acceptable at all.
+          incoming.preservesPitch = true;
+          incoming.playbackRate = plan.incomingRate;
+          incoming.load();
+          await seekWhenReady(incoming, plan.incomingStartSeconds);
+          if (generation !== armGenerationRef.current) return;
+
+          // A gapless join and a transition both want the idle element, and only one of them
+          // can have it. The transition covers the same seam, so it wins — but the armed
+          // gapless track has to be forgotten explicitly or handleEnded would still try to
+          // promote it, from 0:00, out from under the mix.
+          gaplessArmedRef.current = null;
+          armedTransitionRef.current = {
+            targetIndex,
+            targetFile,
+            plan,
+            // Where the mix should begin on the outgoing track's own clock: its outro, snapped
+            // forward to a bar line. Null when there's no grid and no outro, which means "start
+            // once the remaining time is down to the transition's length" — the old behavior.
+            startAtSeconds: beatAlignedStart(plan, outgoingAnalysis, trackDuration),
+            incomingTargetVolume:
+              volume * (volumeNormalizationEnabled ? (track.loudnessGain ?? 1) : 1),
+          };
+        } catch (err) {
+          console.error(`Failed to prepare the transition into ${targetFile.name}`, err);
+          transitionPrepFailuresRef.current.set(targetFile.id, Date.now());
+        } finally {
+          armingTransitionRef.current = false;
+        }
+      })();
+    },
     [
       queue,
-      cachedTracks,
+      currentIndex,
+      peekNextIndex,
       getInactiveAudio,
       getGainNode,
-      volume,
+      session,
+      refreshCachedTracks,
+      ensureAnalysis,
+      autoMixEnabled,
+      beatmatchEnabled,
       crossfadeSeconds,
-      advanceCrossfadeRamp,
-      trackGain,
+      volume,
+      volumeNormalizationEnabled,
     ],
   );
+
+  /** Starts a prepared transition the moment it's due — on the bar line when there is one,
+   * otherwise as soon as the remaining time is down to the transition's own length. */
+  const startArmedTransitionIfDue = useCallback(
+    (outgoing: HTMLAudioElement) => {
+      const armed = armedTransitionRef.current;
+      if (!armed || crossfadeStateRef.current) return;
+
+      const position = outgoing.currentTime;
+      const trackDuration = outgoing.duration;
+      if (armed.startAtSeconds !== null) {
+        // `timeupdate` fires a few times a second, so this can't land exactly on a bar line; it
+        // fires on the first tick at or past it. The overshoot is bounded by that interval and
+        // is small against a bar (~2s at 120 BPM) — audible alignment survives it.
+        if (position < armed.startAtSeconds) return;
+      } else {
+        if (!Number.isFinite(trackDuration)) return;
+        if (trackDuration - position > armed.plan.duration) return;
+      }
+
+      armedTransitionRef.current = null;
+      const incoming = getInactiveAudio();
+      const incomingGain = getGainNode(incoming);
+      const outgoingGain = getGainNode(outgoing);
+      if (!incoming || !incomingGain || !outgoingGain) return;
+
+      // Never let the ramp outlast the outgoing track — `timeupdate` doesn't tick every frame,
+      // so by the time this fires the real time left can already be under the planned length. A
+      // ramp still running when the track ends means the browser's own end-of-media `pause`
+      // fires mid-mix, which (see handlePause) would be misread as the user pausing. A shape
+      // that loops the outgoing tail is exempt: it can't run out, that's what the loop is for.
+      const remaining = trackDuration - position;
+      const durationSeconds = armed.plan.outgoingLoop
+        ? armed.plan.duration
+        : Math.max(0.01, Math.min(armed.plan.duration, Number.isFinite(remaining) ? remaining : armed.plan.duration));
+
+      void tryPlay(incoming, audioContextRef.current);
+      beginTransitionRamp({
+        plan: armed.plan,
+        targetIndex: armed.targetIndex,
+        targetFile: armed.targetFile,
+        outgoing,
+        incoming,
+        outgoingGain,
+        incomingGain,
+        incomingTargetVolume: armed.incomingTargetVolume,
+        durationSeconds,
+        isPreview: false,
+      });
+    },
+    [getInactiveAudio, getGainNode, beginTransitionRamp],
+  );
+
+  /**
+   * Auditioning a transition from the editor, without waiting for playback to reach it.
+   *
+   * Runs on the *main* audio graph rather than a second one. A preview that goes through a
+   * different signal path than real playback is worth very little — the whole question being
+   * asked is "what will this sound like", and the answer has to come from the same filters, the
+   * same per-slot chain, the same ramp. The price is that whatever was playing has to be
+   * displaced for the duration and put back afterwards, which is what suspendedPlaybackRef and
+   * endPreview are.
+   */
+  const previewTransition = useCallback(
+    async (from: DriveFile, to: DriveFile, settings: TransitionSettings) => {
+      if (isPreviewingRef.current) return;
+      // Both tracks have to be downloaded for there to be anything to play.
+      const [fromTrack, toTrack] = await Promise.all([
+        getCachedTrack(from.id),
+        getCachedTrack(to.id),
+      ]);
+      if (!fromTrack || !toTrack) return;
+
+      const outgoing = getActiveAudio();
+      const incoming = getInactiveAudio();
+      const outgoingGain = getGainNode(outgoing);
+      const incomingGain = getGainNode(incoming);
+      if (!outgoing || !incoming || !outgoingGain || !incomingGain) return;
+
+      // Captured before anything is disturbed, so endPreview can put it back.
+      const suspended = currentFile
+        ? { fileId: currentFile.id, progress: progressRef.current, wasPlaying: !outgoing.paused }
+        : null;
+      // Before the flag is set, since cancelCrossfade ends a running preview and would
+      // otherwise tear down the one being set up here.
+      cancelCrossfade();
+      suspendedPlaybackRef.current = suspended;
+
+      // Set before anything else is torn down: from here on the only way out is endPreview,
+      // which guards on this flag.
+      isPreviewingRef.current = true;
+      setIsPreviewingTransition(true);
+      setIsPlaying(false);
+      outgoing.pause();
+      incoming.pause();
+
+      const fromUrl = URL.createObjectURL(fromTrack.blob);
+      const toUrl = URL.createObjectURL(toTrack.blob);
+      previewUrlsRef.current = [fromUrl, toUrl];
+
+      const fromAnalysis = analysesRef.current.get(from.id) ?? null;
+      const toAnalysis = analysesRef.current.get(to.id) ?? null;
+
+      outgoing.src = fromUrl;
+      outgoing.playbackRate = 1;
+      incoming.src = toUrl;
+      outgoing.load();
+      incoming.load();
+      await whenMetadataReady(outgoing);
+      if (!isPreviewingRef.current) return;
+
+      const trackDuration = Number.isFinite(outgoing.duration)
+        ? outgoing.duration
+        : (fromAnalysis?.durationSeconds ?? 0);
+      const plan = resolveTransitionPlan({
+        settings,
+        outgoing: fromAnalysis,
+        incoming: toAnalysis,
+        outgoingDuration: trackDuration > 0 ? trackDuration : null,
+        fallbackDuration: crossfadeSeconds,
+        autoMixEnabled,
+        beatmatchEnabledByDefault: beatmatchEnabled,
+      });
+
+      // Where the mix starts: the same choice playback would make, so what's auditioned is what
+      // will happen.
+      const transitionStart =
+        beatAlignedStart(plan, fromAnalysis, trackDuration) ??
+        Math.max(0, trackDuration - plan.duration);
+      const leadIn = Math.min(PREVIEW_LEAD_IN_SECONDS, transitionStart);
+
+      await seekWhenReady(outgoing, Math.max(0, transitionStart - leadIn));
+      incoming.preservesPitch = true;
+      incoming.playbackRate = plan.incomingRate;
+      await seekWhenReady(incoming, plan.incomingStartSeconds);
+      if (!isPreviewingRef.current) return;
+
+      outgoingGain.gain.value = volume;
+      incomingGain.gain.value = 0;
+      await tryPlay(outgoing, audioContextRef.current);
+
+      previewLeadTimerRef.current = window.setTimeout(
+        () => {
+          if (!isPreviewingRef.current) return;
+          void tryPlay(incoming, audioContextRef.current);
+          beginTransitionRamp({
+            plan,
+            // Unused in preview mode — the ramp's commit branch returns before reading either,
+            // since an audition doesn't change what's playing.
+            targetIndex: -1,
+            targetFile: to,
+            outgoing,
+            incoming,
+            outgoingGain,
+            incomingGain,
+            incomingTargetVolume: volume,
+            durationSeconds: plan.duration,
+            isPreview: true,
+          });
+        },
+        leadIn * 1000,
+      );
+    },
+    [
+      getActiveAudio,
+      getInactiveAudio,
+      getGainNode,
+      currentFile,
+      cancelCrossfade,
+      crossfadeSeconds,
+      autoMixEnabled,
+      beatmatchEnabled,
+      volume,
+      beginTransitionRamp,
+    ],
+  );
+
+  /** Puts the graph and the player's own state back the way the preview found them. Safe to
+   * call when nothing is previewing. */
+  const endPreview = useCallback(() => {
+    if (!isPreviewingRef.current) return;
+    isPreviewingRef.current = false;
+    setIsPreviewingTransition(false);
+    window.clearTimeout(previewLeadTimerRef.current);
+    window.clearTimeout(previewTailTimerRef.current);
+    crossfadeStateRef.current = null;
+    resetSlotChain(chainARef.current);
+    resetSlotChain(chainBRef.current);
+
+    const active = getActiveAudio();
+    const inactive = getInactiveAudio();
+    for (const element of [active, inactive]) {
+      if (!element) continue;
+      element.pause();
+      element.removeAttribute("src");
+      element.playbackRate = 1;
+      element.load();
+    }
+    const inactiveGain = getGainNode(inactive);
+    if (inactiveGain) inactiveGain.gain.value = 0;
+
+    for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
+    previewUrlsRef.current = [];
+
+    const suspended = suspendedPlaybackRef.current;
+    suspendedPlaybackRef.current = null;
+    // Only restore if the same track is still the current one — the user may have picked
+    // something else from another screen while the preview ran. The blob URL it was playing
+    // from was never revoked (the preview used its own), so this is a re-attach, not a reload.
+    if (!suspended || !active || currentFile?.id !== suspended.fileId) return;
+    const url = objectUrlRef.current;
+    if (!url) return;
+    active.src = url;
+    const activeGain = getGainNode(active);
+    if (activeGain) activeGain.gain.value = volume * trackGain(suspended.fileId);
+    void (async () => {
+      await seekWhenReady(active, suspended.progress);
+      progressRef.current = suspended.progress;
+      setProgress(suspended.progress);
+      if (suspended.wasPlaying) await tryPlay(active, audioContextRef.current);
+    })();
+  }, [getActiveAudio, getInactiveAudio, getGainNode, currentFile, volume, trackGain]);
+
+  // cancelCrossfade needs to be able to end a preview, and is defined far above this.
+  useEffect(() => {
+    endPreviewRef.current = endPreview;
+  }, [endPreview]);
+
+  const stopTransitionPreview = useCallback(() => {
+    endPreview();
+  }, [endPreview]);
+
 
   const seek = useCallback(
     (seconds: number) => {
@@ -1752,6 +2682,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Runs for both elements (including the inactive one mid-fade-in) — see
       // advanceCrossfadeRamp's own comment for why this can't rely on rAF alone.
       advanceCrossfadeRamp();
+      // An audition is playing something that isn't the queue: its position is not the
+      // session's position, and it must not persist anything or arm the next transition.
+      if (isPreviewingRef.current) return;
       if (el !== getActiveAudio()) return;
       const t = el.currentTime;
       progressRef.current = t;
@@ -1770,11 +2703,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Crossfade wins when it's on: it already covers the join (and it needs the idle element
       // for its own fade-in, so both arming it and fading into it would fight over the same
       // element). Gapless is what handles the join when the transition is a straight cut.
+      //
+      // Two steps, not one: preparing a transition involves a download, a decode and possibly an
+      // analysis, none of which can happen at the moment the mix is due to start.
       if (crossfadeEnabled && crossfadeSeconds > 0) {
-        if (remaining > crossfadeSeconds) return;
-        const target = peekNextIndex();
-        if (target === null) return;
-        startCrossfade(target, el);
+        armTransition(el);
+        startArmedTransitionIfDue(el);
         return;
       }
 
@@ -1791,7 +2725,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       crossfadeSeconds,
       gaplessEnabled,
       peekNextIndex,
-      startCrossfade,
+      armTransition,
+      startArmedTransitionIfDue,
       armGapless,
       advanceCrossfadeRamp,
     ],
@@ -1831,6 +2766,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // fire. Reporting "paused" here would stick — the incoming element's own `play` event is
       // ignored while it's still the inactive one.
       if (e.currentTarget.ended && gaplessArmedRef.current) return;
+      // Same for a preview: it pauses and swaps sources on both elements by design, and none of
+      // that is the queue's playback state.
+      if (isPreviewingRef.current) return;
       setIsPlaying(false);
       persistSession(progressRef.current);
     },
@@ -1881,6 +2819,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       spatialAudioIntensity,
       setSpatialAudioEnabled,
       setSpatialAudioIntensity,
+      autoMixEnabled,
+      setAutoMixEnabled,
+      beatmatchEnabled,
+      setBeatmatchEnabled,
+      autoAnalyzeEnabled,
+      setAutoAnalyzeEnabled,
+      analyses,
+      ensureAnalysis,
+      trackAnalysisProgress,
+      analyzeAllTracks,
+      getTransition,
+      setTransition,
+      isPreviewingTransition,
+      previewTransition,
+      stopTransitionPreview,
       getAudioLevel,
       play,
       addToQueue,
@@ -1942,6 +2895,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       spatialAudioIntensity,
       setSpatialAudioEnabled,
       setSpatialAudioIntensity,
+      autoMixEnabled,
+      setAutoMixEnabled,
+      beatmatchEnabled,
+      setBeatmatchEnabled,
+      autoAnalyzeEnabled,
+      setAutoAnalyzeEnabled,
+      analyses,
+      ensureAnalysis,
+      trackAnalysisProgress,
+      analyzeAllTracks,
+      getTransition,
+      setTransition,
+      isPreviewingTransition,
+      previewTransition,
+      stopTransitionPreview,
       getAudioLevel,
       play,
       addToQueue,

@@ -8,6 +8,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Download, PlayCircle } from "luci
 import { SignInScreen } from "@/components/SignInScreen";
 import { FEATURE_GROUPS, FEATURE_SIZE } from "@/lib/features";
 import { HIDDEN_SIZE } from "@/lib/model";
+import { qualityTier } from "@/lib/analysis";
 import {
   listCachedTracks,
   listModelEvents,
@@ -683,7 +684,7 @@ function AdminDashboard() {
   // same object trainStep() mutates when a track finishes, anywhere in the app. Reading it
   // from context instead of a one-off loadModel() means every stat and the network
   // visualizer below re-render the instant a real training step happens.
-  const { play, model } = usePlayer();
+  const { play, model, analyses } = usePlayer();
   const [cachedTracks, setCachedTracks] = useState<CachedTrack[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [recentSources, setRecentSources] = useState<RecentSource[]>([]);
@@ -692,6 +693,15 @@ function AdminDashboard() {
     usage: number;
     quota: number;
   } | null>(null);
+
+  const qualityCounts = { low: 0, medium: 0, high: 0, unknown: 0 };
+  let tempoCount = 0;
+  let keyCount = 0;
+  for (const analysis of analyses.values()) {
+    qualityCounts[qualityTier(analysis)] += 1;
+    if (analysis.bpm !== undefined) tempoCount += 1;
+    if (analysis.camelotKey) keyCount += 1;
+  }
 
   useEffect(() => {
     Promise.all([
@@ -809,6 +819,38 @@ function AdminDashboard() {
               value={`${formatBytes(storageEstimate.usage)} / ${formatBytes(storageEstimate.quota)}`}
             />
           )}
+        </section>
+
+        <section className="mb-8 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+          <h2 className="mb-1 text-sm font-medium text-zinc-500 dark:text-zinc-400">
+            Audio quality
+          </h2>
+          {/* Counts only analyzed tracks. A track without analysis isn't "unknown quality", it's
+              simply unmeasured, and folding those in as a category would make the proportions
+              lie. The tiers come from where the spectrum stops — see src/lib/analysis.ts. */}
+          <p className="mb-4 text-xs text-zinc-400">
+            Measured from where each track&apos;s spectrum actually stops, which is a better
+            answer than the bitrate a file claims: a 320kbps MP3 made from a 128kbps source
+            still shows the 16kHz wall of its real origin.
+          </p>
+          {analyses.size === 0 ? (
+            <p className="text-sm text-zinc-400">
+              Nothing analyzed yet — turn on Auto mix, or run &quot;Analyze now&quot; in
+              Settings.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatTile label="320kbps / lossless" value={String(qualityCounts.high)} />
+              <StatTile label="192–256kbps" value={String(qualityCounts.medium)} />
+              <StatTile label="128kbps or lower" value={String(qualityCounts.low)} />
+              <StatTile label="Unmeasurable" value={String(qualityCounts.unknown)} />
+            </div>
+          )}
+          <p className="mt-4 text-xs text-zinc-400">
+            {analyses.size} of {cachedTracks.length} downloaded tracks analyzed
+            {tempoCount > 0 && ` · ${tempoCount} with a detected tempo`}
+            {keyCount > 0 && ` · ${keyCount} with a detected key`}
+          </p>
         </section>
 
         <section className="mb-8 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">

@@ -83,7 +83,7 @@ export function DriveBrowser() {
       {!loading && !error && audioFiles.length > 0 && <DownloadAllButton files={audioFiles} />}
 
       <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-        {items.map((file) =>
+        {items.map((file, position) =>
           isFolder(file) ? (
             <li key={file.id}>
               <button
@@ -101,6 +101,9 @@ export function DriveBrowser() {
               queue={audioFiles}
               index={audioIndex.get(file.id)!}
               cachedTrack={cachedTracks.get(file.id)}
+              // The next *track* below this row — folders sort above tracks here, but a
+              // stray one between two of them isn't part of the transition.
+              nextFile={items.slice(position + 1).find((next) => !isFolder(next))}
               source={{ type: "folder", id: current.id, name: current.name }}
             />
           ),

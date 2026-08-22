@@ -7,18 +7,37 @@ import type {
   PlaybackSession,
   Playlist,
   RecentSource,
+  TrackAnalysis,
 } from "@/types";
 import { createDefaultModel } from "@/lib/model";
+import { ANALYZER_VERSION } from "@/lib/analysis";
+import type { TransitionSettings } from "@/lib/transition";
 
 const DB_NAME = "drive-music";
-const DB_VERSION = 9;
+const DB_VERSION = 10;
 const TRACKS_STORE = "tracks";
 const PLAYLISTS_STORE = "playlists";
 const RECENT_SOURCES_STORE = "recentSources";
 const MODEL_STORE = "model";
 const MODEL_EVENTS_STORE = "modelEvents";
 const PLAYBACK_SESSION_STORE = "playbackSession";
+const TRACK_ANALYSIS_STORE = "trackAnalysis";
+const TRANSITIONS_STORE = "transitions";
 const MAX_MODEL_EVENTS = 500;
+
+/**
+ * A user's overrides for one transition, keyed by the *pair* of tracks rather than by either one
+ * alone — "this song into that song" is the thing a user tunes, and the same song leads into
+ * different neighbours differently. Both directions are distinct entries: A→B is not B→A.
+ */
+export interface StoredTransition {
+  key: string;
+  settings: TransitionSettings;
+}
+
+export function transitionKey(fromFileId: string, toFileId: string): string {
+  return `${fromFileId}|${toFileId}`;
+}
 
 interface DriveMusicDB extends DBSchema {
   tracks: {
@@ -45,6 +64,14 @@ interface DriveMusicDB extends DBSchema {
     key: string;
     value: PlaybackSession;
   };
+  trackAnalysis: {
+    key: string;
+    value: TrackAnalysis;
+  };
+  transitions: {
+    key: string;
+    value: StoredTransition;
+  };
 }
 
 let dbPromise: Promise<IDBPDatabase<DriveMusicDB>> | undefined;
@@ -70,6 +97,15 @@ function getDb(): Promise<IDBPDatabase<DriveMusicDB>> {
         }
         if (!db.objectStoreNames.contains(PLAYBACK_SESSION_STORE)) {
           db.createObjectStore(PLAYBACK_SESSION_STORE, { keyPath: "id" });
+        }
+        // v10: the mix engine. Analysis is pure derived data (recomputable from the audio at any
+        // time) while transitions are the user's own edits — separate stores because they have
+        // opposite disposability, and only the first is safe to drop on a version bump.
+        if (!db.objectStoreNames.contains(TRACK_ANALYSIS_STORE)) {
+          db.createObjectStore(TRACK_ANALYSIS_STORE, { keyPath: "fileId" });
+        }
+        if (!db.objectStoreNames.contains(TRANSITIONS_STORE)) {
+          db.createObjectStore(TRANSITIONS_STORE, { keyPath: "key" });
         }
 
         // v8: loudness gain switched from "attenuate only, capped at 1" to "boost or
@@ -259,7 +295,78 @@ export async function savePlaybackSession(
   await db.put(PLAYBACK_SESSION_STORE, session);
 }
 
-/** Wipes every store (downloaded tracks, playlists, model, history, playback session) plus
+/**
+ * A track's cached analysis, or undefined when there isn't a usable one — including when the
+ * stored result came from an older analyzer (see ANALYZER_VERSION), since a stale beat grid is
+ * worse than none: the mix trusts it.
+ */
+export async function getTrackAnalysis(fileId: string): Promise<TrackAnalysis | undefined> {
+  const db = await getDb();
+  const stored = await db.get(TRACK_ANALYSIS_STORE, fileId);
+  if (!stored || stored.version !== ANALYZER_VERSION) return undefined;
+  return stored;
+}
+
+export async function putTrackAnalysis(analysis: TrackAnalysis): Promise<void> {
+  const db = await getDb();
+  await db.put(TRACK_ANALYSIS_STORE, analysis);
+}
+
+/** Every current-version analysis on the device, keyed by file id. Used by the admin screen's
+ * quality breakdown and by the player's warm-up, both of which want the whole library at once
+ * rather than the handful of tracks that happen to have been touched this session. */
+export async function listTrackAnalyses(): Promise<Map<string, TrackAnalysis>> {
+  const db = await getDb();
+  const all = await db.getAll(TRACK_ANALYSIS_STORE);
+  const result = new Map<string, TrackAnalysis>();
+  for (const analysis of all) {
+    if (analysis.version === ANALYZER_VERSION) result.set(analysis.fileId, analysis);
+  }
+  return result;
+}
+
+export async function clearTrackAnalyses(): Promise<void> {
+  const db = await getDb();
+  await db.clear(TRACK_ANALYSIS_STORE);
+}
+
+/** The user's overrides for one ordered pair of tracks, or undefined for a transition they've
+ * never touched (which is every transition until they do — see AUTO_TRANSITION). */
+export async function getTransitionSettings(
+  fromFileId: string,
+  toFileId: string,
+): Promise<TransitionSettings | undefined> {
+  const db = await getDb();
+  const stored = await db.get(TRANSITIONS_STORE, transitionKey(fromFileId, toFileId));
+  return stored?.settings;
+}
+
+/** Saves — or, for an all-defaults override, deletes. Storing "nothing overridden" would grow
+ * the store with entries that say nothing and make "is this one customized?" wrong in the UI. */
+export async function putTransitionSettings(
+  fromFileId: string,
+  toFileId: string,
+  settings: TransitionSettings | null,
+): Promise<void> {
+  const db = await getDb();
+  const key = transitionKey(fromFileId, toFileId);
+  if (!settings) {
+    await db.delete(TRANSITIONS_STORE, key);
+    return;
+  }
+  await db.put(TRANSITIONS_STORE, { key, settings });
+}
+
+/** Every stored override, keyed by "from|to". Read once and kept in memory: a playlist screen
+ * shows every transition in it, and these are a few bytes each. */
+export async function listTransitionSettings(): Promise<Map<string, TransitionSettings>> {
+  const db = await getDb();
+  const all = await db.getAll(TRANSITIONS_STORE);
+  return new Map(all.map((stored) => [stored.key, stored.settings]));
+}
+
+/** Wipes every store (downloaded tracks, playlists, model, history, playback session, track
+ * analysis, transition overrides) plus
  * every "drive-music-"-prefixed localStorage key (device sync identity, crossfade/idle-motion
  * prefs) — everything this app keeps on the device. Does not sign the user out of Google;
  * that's a separate, cookie-based session. Irreversible — callers must confirm with the user
@@ -273,6 +380,8 @@ export async function clearAllData(): Promise<void> {
     db.clear(MODEL_STORE),
     db.clear(MODEL_EVENTS_STORE),
     db.clear(PLAYBACK_SESSION_STORE),
+    db.clear(TRACK_ANALYSIS_STORE),
+    db.clear(TRANSITIONS_STORE),
   ]);
 
   const keysToRemove: string[] = [];

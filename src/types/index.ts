@@ -32,6 +32,49 @@ export interface CachedTrack {
   loudnessGain?: number;
 }
 
+/**
+ * What the mix engine needs to know about a track beyond "where the audio file is": how fast it
+ * is, where its beats fall, what key it's in, and a coarse picture of its loudness over time.
+ *
+ * Computed once per track by src/lib/analyzer.ts (reading the decoded audio) and cached in
+ * IndexedDB — the analysis takes a second or more on a full track, far too slow to run at the
+ * moment a transition needs the answer. Every measurement is optional: a track whose tempo couldn't be
+ * found gets `bpm: undefined` and simply doesn't get beat-aligned, rather than a wrong number
+ * that the mix then trusts.
+ */
+export interface TrackAnalysis {
+  fileId: string;
+  /** Detected tempo. Undefined when detection wasn't confident enough. */
+  bpm?: number;
+  /** Seconds from the start of the file to the first detected beat. Meaningless without `bpm`;
+   * together the two describe the whole beat grid, since analysis assumes a constant tempo. */
+  firstBeatSeconds?: number;
+  /** Musical key in Camelot notation ("8A", "5B", ...) — the wheel DJs use because adjacent
+   * numbers are a fifth apart and A/B at the same number are relative minor/major. */
+  camelotKey?: string;
+  /** Where the track is worth mixing *into* — past the intro, at the first bar line where the
+   * music is properly underway. Distinct from `firstBeatSeconds`, which is only the grid's
+   * phase within a single beat and so always lands within a second of the file's start. */
+  mixInSeconds?: number;
+  /** Where the track is worth mixing *out* of — the moment its last full-strength section ends
+   * and the outro begins. Undefined when the track has no discernible outro, which includes the
+   * common case of a hard ending. */
+  mixOutSeconds?: number;
+  /** Length of the analyzed audio, in seconds. Stored because the waveform is normalized over
+   * the whole track, so turning a position on it into a time needs the track's length. */
+  durationSeconds?: number;
+  /** Highest frequency, in Hz, that still carries real energy — the point a lossy encoder cut
+   * the track off at. The honest measure of "what quality is this file really?", and a better
+   * one than the bitrate a container claims. */
+  spectralCutoffHz?: number;
+  /** Normalized 0..1 loudness envelope over the whole track, evenly spaced. Draws the waveform
+   * in the transition editor and picks the mix points; deliberately coarse. */
+  waveform: number[];
+  /** Analyzer version that produced this. Bumped when the algorithm changes so stale cached
+   * results get recomputed instead of silently outliving the code that made them. */
+  version: number;
+}
+
 /** Minimal shape needed to render and play a track, whichever source it came from. */
 export interface TrackEntry {
   driveMeta: DriveFile;

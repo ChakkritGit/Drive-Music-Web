@@ -101,12 +101,13 @@ export function CollectionDetail({ title, subtitle, tracks, source, onBack }: Co
         <p className="py-10 text-sm text-zinc-400">No tracks match &quot;{query}&quot;.</p>
       ) : (
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-          {visibleTracks.map(({ file, index }) => (
+          {visibleTracks.map(({ file, index }, position) => (
             <TrackRow
               key={`${file.id}-${index}`}
               file={file}
               queue={tracks}
               index={index}
+              nextFile={visibleTracks[position + 1]?.file}
               cachedTrack={cachedTracks.get(file.id)}
               source={source}
             />

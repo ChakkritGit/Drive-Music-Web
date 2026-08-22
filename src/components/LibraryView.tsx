@@ -74,13 +74,16 @@ export function LibraryView() {
         <p className="py-10 text-sm text-zinc-400">No downloaded tracks match &quot;{query}&quot;.</p>
       ) : (
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-          {visibleTracks.map(({ t, index }) => (
+          {visibleTracks.map(({ t, index }, position) => (
             <TrackRow
               key={t.fileId}
               file={t.driveMeta}
               cachedTrack={t}
               queue={queue}
               index={index}
+              // The *list's* next row, not the queue's — sorting and search make those two
+              // different things, and the chip belongs to the seam the user can see.
+              nextFile={visibleTracks[position + 1]?.t.driveMeta}
               source={LIBRARY_SOURCE}
               onRemove={() => removeFromCache(t.fileId)}
               removeLabel="Remove download"

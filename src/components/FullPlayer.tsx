@@ -22,6 +22,8 @@ import { usePlaylists } from "@/components/PlaylistsContext";
 import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
 import { TrackRow } from "@/components/TrackRow";
+import { TransitionChip } from "@/components/TransitionChip";
+import { analysisSummary } from "@/lib/analysis";
 
 const FALLBACK_GLOW = "rgb(120, 120, 120)";
 
@@ -58,9 +60,14 @@ export function FullPlayer() {
     removeFromQueue,
     visualizerEnabled,
     getAudioLevel,
+    crossfadeEnabled,
+    autoMixEnabled,
+    analyses,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
   const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
+
+  const mixSummary = currentFile ? analysisSummary(analyses.get(currentFile.id)) : "";
 
   const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
   const [showQueue, setShowQueue] = useState(false);
@@ -223,6 +230,11 @@ export function FullPlayer() {
                 Playing from {currentSource.name}
               </p>
             )}
+            {/* The two numbers that decide what the mix out of this track can do. Only shown
+                when mixing is on, which is the only time they mean anything. */}
+            {currentFile && crossfadeEnabled && autoMixEnabled && mixSummary && (
+              <p className="mt-0.5 truncate text-xs tabular-nums text-zinc-400">{mixSummary}</p>
+            )}
             {synced && remoteNowPlaying && (
               <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent">
                 <Users className="h-3 w-3" /> Synced with {remoteNowPlaying.deviceName}
@@ -381,17 +393,23 @@ export function FullPlayer() {
                 <X className="h-4 w-4" />
               </button>
             </div>
+            {currentFile && upNext.length > 0 && (
+              <div className="px-5 pb-1">
+                <TransitionChip from={currentFile} to={upNext[0].file} />
+              </div>
+            )}
             {upNext.length === 0 ? (
               <p className="px-5 pb-6 text-sm text-zinc-400">Nothing queued after this track.</p>
             ) : (
               <ul className="min-h-0 flex-1 divide-y divide-zinc-100 overflow-y-auto px-5 pb-4 dark:divide-zinc-900">
-                {upNext.map(({ file, index }) => (
+                {upNext.map(({ file, index }, position) => (
                   <TrackRow
                     key={`${file.id}-${index}`}
                     file={file}
                     queue={queue}
                     index={index}
                     cachedTrack={cachedTracks.get(file.id)}
+                    nextFile={upNext[position + 1]?.file}
                     onRemove={() => removeFromQueue(index)}
                     removeLabel="Remove from queue"
                   />
