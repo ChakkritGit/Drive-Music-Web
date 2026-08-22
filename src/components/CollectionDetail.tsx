@@ -6,6 +6,7 @@ import type { DriveFile, PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { TrackRow } from "@/components/TrackRow";
 import { DownloadAllButton } from "@/components/DownloadAllButton";
+import { SequenceMixButton } from "@/components/SequenceMixButton";
 import { extractFeatures } from "@/lib/features";
 import { predict, weightedRandomIndex } from "@/lib/model";
 
@@ -81,7 +82,12 @@ export function CollectionDetail({ title, subtitle, tracks, source, onBack }: Co
         </div>
       )}
 
-      {tracks.length > 0 && <DownloadAllButton files={tracks} />}
+      {tracks.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <DownloadAllButton files={tracks} />
+          <SequenceMixButton files={tracks} source={source} className="mb-4" />
+        </div>
+      )}
 
       {tracks.length > 0 && (
         <div className="relative mt-4 mb-4">

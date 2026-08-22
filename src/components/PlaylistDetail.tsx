@@ -7,6 +7,7 @@ import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { TrackRow } from "@/components/TrackRow";
 import { DownloadAllButton } from "@/components/DownloadAllButton";
+import { SequenceMixButton } from "@/components/SequenceMixButton";
 
 export function PlaylistDetail({ playlist, onBack }: { playlist: Playlist; onBack: () => void }) {
   const { cachedTracks } = usePlayer();
@@ -38,7 +39,16 @@ export function PlaylistDetail({ playlist, onBack }: { playlist: Playlist; onBac
         {playlist.tracks.length} track{playlist.tracks.length === 1 ? "" : "s"}
       </p>
 
-      {playlist.tracks.length > 0 && <DownloadAllButton files={playlist.tracks} />}
+      {playlist.tracks.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <DownloadAllButton files={playlist.tracks} />
+          <SequenceMixButton
+            files={playlist.tracks}
+            source={{ type: "playlist", id: playlist.id, name: playlist.name }}
+            className="mb-4"
+          />
+        </div>
+      )}
 
       {playlist.tracks.length > 0 && (
         <div className="relative mt-4 mb-4">

@@ -6,8 +6,6 @@ import {
   Heart,
   ListMusic,
   Music,
-  Pause,
-  Play,
   Repeat,
   Repeat1,
   Shuffle,
@@ -18,6 +16,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
+import { PlayPauseIcon } from "@/components/PlayPauseIcon";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
@@ -304,12 +303,9 @@ export function FullPlayer() {
             onClick={togglePlay}
             disabled={!currentFile || isLoading}
             className="rounded-full bg-zinc-900 p-4 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+            aria-label={isPlaying ? "Pause" : "Play"}
           >
-            {isPlaying ? (
-              <Pause className="h-6 w-6" />
-            ) : (
-              <Play className="h-6 w-6" />
-            )}
+            <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />
           </button>
           <button
             onClick={next}

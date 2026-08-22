@@ -7,8 +7,6 @@ import {
   ChevronUp,
   ListMusic,
   Music,
-  Pause,
-  Play,
   Repeat,
   Repeat1,
   Shuffle,
@@ -20,6 +18,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
+import { PlayPauseIcon } from "@/components/PlayPauseIcon";
 import { useSync } from "@/components/SyncContext";
 
 function formatTime(sec: number): string {
@@ -258,25 +257,22 @@ export function Player() {
               <button
                 onClick={prev}
                 disabled={!currentFile}
-                className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
+                className="rounded-full p-2 text-zinc-500 transition active:scale-90 disabled:active:scale-100 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
               >
                 <SkipBack className="h-4 w-4" />
               </button>
               <button
                 onClick={togglePlay}
                 disabled={!currentFile || isLoading}
-                className="rounded-full bg-zinc-900 p-2.5 text-white transition hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+                className="rounded-full bg-zinc-900 p-2.5 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+                aria-label={isPlaying ? "Pause" : "Play"}
               >
-                {isPlaying ? (
-                  <Pause className="h-4 w-4" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
+                <PlayPauseIcon playing={isPlaying} className="h-4 w-4" />
               </button>
               <button
                 onClick={next}
                 disabled={!currentFile}
-                className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
+                className="rounded-full p-2 text-zinc-500 transition active:scale-90 disabled:active:scale-100 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
               >
                 <SkipForward className="h-4 w-4" />
               </button>
