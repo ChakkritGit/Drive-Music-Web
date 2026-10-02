@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Terms of Service — Drive Music",
+  title: "Terms of Service",
   description: "The terms for using Drive Music.",
 };
 

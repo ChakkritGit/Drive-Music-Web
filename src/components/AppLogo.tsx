@@ -1,9 +1,9 @@
 import Image from "next/image";
 import clsx from "clsx";
 
-// The app icon — the same artwork the iOS app ships (drive-music-ios' AppIcon), so the web
-// app, the installed PWA and the iOS app all read as one product. It carries its own dark
-// background, so it needs no theme variant: it looks the same in light and dark mode.
+// The app icon: a D whose bowl is a record (docs/brand/logo.svg), the same artwork as the
+// favicon, the installed PWA and the Google sign-in consent screen, which must all match. It
+// carries its own dark background, so it needs no theme variant.
 export function AppLogo({
   size = 48,
   className,
@@ -17,8 +17,7 @@ export function AppLogo({
       alt=""
       width={size}
       height={size}
-      // Rounded like an iOS app icon rather than a full circle — a circle crops into the
-      // note glyph, which sits close to the artwork's left edge.
+      // Rounded like an iOS app icon rather than a full circle, which would crop the D.
       className={clsx("rounded-[22.5%]", className)}
       priority
     />

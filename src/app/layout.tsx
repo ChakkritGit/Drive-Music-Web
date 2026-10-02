@@ -15,9 +15,24 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const DESCRIPTION =
+  "A personal music player for the audio files in your own Google Drive: offline downloads, DJ-style mixing, an equalizer and cross-device sync. Read-only access, no ads, no tracking.";
+
 export const metadata: Metadata = {
-  title: "Drive Music",
-  description: "Play music from your Google Drive, with offline caching.",
+  // Absolute URLs for the OG image and canonical; the production host, not a preview one.
+  metadataBase: new URL("https://drive-music-taupe.vercel.app"),
+  title: { default: "Drive Music", template: "%s · Drive Music" },
+  description: DESCRIPTION,
+  applicationName: "Drive Music",
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    siteName: "Drive Music",
+    title: "Drive Music",
+    description: DESCRIPTION,
+    url: "/",
+  },
+  twitter: { card: "summary_large_image", title: "Drive Music", description: DESCRIPTION },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

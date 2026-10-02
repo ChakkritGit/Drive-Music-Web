@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Drive Music",
     short_name: "Drive Music",
-    description: "Play music from your Google Drive, with offline caching.",
+    description: "Your Google Drive music, offline and mixed like a DJ.",
     start_url: "/",
     display: "standalone",
     background_color: "#09090b",

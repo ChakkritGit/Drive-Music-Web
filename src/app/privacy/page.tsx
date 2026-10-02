@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — Drive Music",
+  title: "Privacy Policy",
   description: "How Drive Music accesses, stores, and handles your data.",
 };
 
