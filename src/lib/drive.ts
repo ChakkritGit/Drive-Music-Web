@@ -61,6 +61,30 @@ export async function downloadFile(accessToken: string, file: DriveFile): Promis
   return new Blob([buffer], { type: file.mimeType || "application/octet-stream" });
 }
 
+/**
+ * downloadFile, retried once with a fresh token on a 401.
+ *
+ * The browser's copy of the Google token is only refetched when the session is (on tab focus),
+ * so after an hour of listening in the background the next download got a 401 and playback
+ * stopped until the tab was focused again. `refresh` asks the server for the session, which
+ * runs its token refresh, and resolves the new access token.
+ */
+export async function downloadFileFresh(
+  accessToken: string,
+  file: DriveFile,
+  refresh: () => Promise<string | undefined>,
+): Promise<Blob> {
+  try {
+    return await downloadFile(accessToken, file);
+  } catch (err) {
+    if (!(err instanceof DriveApiError && err.status === 401)) throw err;
+    const fresh = await refresh();
+    // The same token back means the server's refresh failed too; the original error stands.
+    if (!fresh || fresh === accessToken) throw err;
+    return downloadFile(fresh, file);
+  }
+}
+
 export function isFolder(file: DriveFile): boolean {
   return file.mimeType === FOLDER_MIME_TYPE;
 }

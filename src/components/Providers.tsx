@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { SessionProvider } from "next-auth/react";
 import { ThemeProvider } from "@/components/ThemeContext";
 import { ToastProvider } from "@/components/ToastContext";
+import { AccountGuard } from "@/components/AccountGuard";
 import { PlayerProvider } from "@/components/PlayerContext";
 import { PlaylistsProvider } from "@/components/PlaylistsContext";
 import { SyncProvider } from "@/components/SyncContext";
@@ -23,7 +24,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <SessionProvider>
+    // Refetched every 30 minutes, not only on tab focus: the Google token lasts an hour, and
+    // music keeps playing while the tab is in the background.
+    <SessionProvider refetchInterval={30 * 60}>
+      <AccountGuard />
       {/* Outermost of ours: it owns the <html> data-theme/data-scheme attributes everything
           below is painted from, and it renders no markup of its own. */}
       <ThemeProvider>

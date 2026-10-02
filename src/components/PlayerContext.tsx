@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSession } from "next-auth/react";
+import { getSession, useSession } from "next-auth/react";
 import { useToast } from "@/components/ToastContext";
 import type {
   CachedTrack,
@@ -21,7 +21,7 @@ import type {
   RecentSource,
   TrackAnalysis,
 } from "@/types";
-import { downloadFile } from "@/lib/drive";
+import { downloadFileFresh } from "@/lib/drive";
 import { parseTrackMetadata } from "@/lib/metadata";
 import { extractFeatures } from "@/lib/features";
 import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
@@ -285,7 +285,7 @@ async function ensureCached(
   if (cached) return cached;
 
   if (!accessToken) throw new Error("Not signed in");
-  const blob = await downloadFile(accessToken, file);
+  const blob = await downloadFileFresh(accessToken, file, async () => (await getSession())?.accessToken);
   const parsedMeta = await parseTrackMetadata(blob, file);
   const track: CachedTrack = {
     fileId: file.id,
