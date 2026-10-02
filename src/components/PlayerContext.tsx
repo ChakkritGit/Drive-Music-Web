@@ -266,9 +266,16 @@ function clampEqGain(db: number): number {
  * this is where the browser's separate "AudioContext needs a user gesture too" gate gets
  * satisfied, same spirit as the NotAllowedError handling below.
  */
+/** True when the shared graph exists but is not making sound. "interrupted" (a newer state some
+ * browsers use for OS-level interruptions) is as silent as "suspended", and only resuming it
+ * brings the audio back: the elements keep playing into a graph that outputs nothing. */
+function needsResume(ctx: AudioContext | null): ctx is AudioContext {
+  return !!ctx && ctx.state !== "running" && ctx.state !== "closed";
+}
+
 async function tryPlay(audio: HTMLAudioElement, ctx: AudioContext | null): Promise<void> {
   try {
-    if (ctx && ctx.state === "suspended") await ctx.resume();
+    if (needsResume(ctx)) await ctx.resume();
     await audio.play();
   } catch (err) {
     if (err instanceof DOMException && err.name === "NotAllowedError") return;
@@ -612,6 +619,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new AudioContextCtor();
     audioContextRef.current = ctx;
+    // The graph can leave "running" mid-song while the tab is hidden, and every element plays
+    // through it, so the music went silent with its clock still moving. Resume straight away
+    // while anything is meant to be playing; if the browser refuses, the next play or the tab
+    // becoming visible tries again.
+    ctx.addEventListener("statechange", () => {
+      if (needsResume(ctx) && (!audioA.paused || !audioB.paused)) void ctx.resume().catch(() => {});
+    });
 
     const gainA = ctx.createGain();
     ctx.createMediaElementSource(audioA).connect(gainA);
@@ -1603,6 +1617,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const audio = getActiveAudio();
     if (!audio) return;
     if (audio.paused) {
+      // Outside a transition the active slot's level is fully determined, so put it back: a fade
+      // cut short while the tab was hidden could leave it at 0, playing silently.
+      const gainNode = getGainNode(audio);
+      if (gainNode && currentFile && !crossfadeStateRef.current) {
+        gainNode.gain.value = volume * trackGain(currentFile.id);
+      }
       void tryPlay(audio, audioContextRef.current);
     } else {
       // Pausing mid-crossfade would otherwise leave the inactive element silently playing (or
@@ -1610,7 +1630,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       cancelCrossfade();
       audio.pause();
     }
-  }, [getActiveAudio, cancelCrossfade]);
+  }, [getActiveAudio, cancelCrossfade, getGainNode, currentFile, volume, trackGain]);
 
   // Spacebar toggles play/pause anywhere in the app — except while the user is actually
   // typing/focused on an interactive element, where Space needs to keep doing its normal job
@@ -1656,7 +1676,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Resume it here so audio that was genuinely still meant to be playing is actually
       // audible again, instead of depending on iOS's own (inconsistent) auto-resume.
       const ctx = audioContextRef.current;
-      if (ctx && ctx.state === "suspended" && !audio.paused) void ctx.resume();
+      if (needsResume(ctx) && !audio.paused) void ctx.resume().catch(() => {});
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
