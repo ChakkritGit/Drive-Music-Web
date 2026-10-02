@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
 import {
   addTrackToPlaylist,
+  claimForAccount,
   clearAllData,
   createPlaylist,
   deleteCachedTrack,
@@ -304,6 +305,66 @@ describe("clearAllData", () => {
     expect((await loadModel()).trainingEvents).toBe(0);
     expect(localStorage.getItem("drive-music-crossfade-enabled")).toBeNull();
     expect(localStorage.getItem("unrelated-key")).toBe("should-survive");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("claimForAccount", () => {
+  async function seed() {
+    await createPlaylist("Mine");
+    await putCachedTrack({
+      fileId: "claim-track",
+      blob: new Blob(["x"]),
+      mimeType: "audio/mpeg",
+      driveMeta: file("claim-track"),
+      parsedMeta: {},
+      cachedAt: Date.now(),
+    });
+    await recordModelEvent({ id: "claim-ev", trackId: "t", title: "T", fraction: 1, predicted: 1, at: 1 });
+  }
+
+  function stubStorage() {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return store.size;
+      },
+      key: (i: number) => Array.from(store.keys())[i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    });
+  }
+
+  it("keeps the data and stores the key on first claim, and when the key matches", async () => {
+    stubStorage();
+    await clearAllData();
+    await seed();
+
+    expect(await claimForAccount("acct-a")).toBe(false);
+    expect(localStorage.getItem("drive-music-account")).toBe("acct-a");
+    expect(await listCachedTracks()).toHaveLength(1);
+
+    expect(await claimForAccount("acct-a")).toBe(false);
+    expect(await listCachedTracks()).toHaveLength(1);
+    expect(await listPlaylists()).toHaveLength(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("wipes the data and stores the new key when the account differs", async () => {
+    stubStorage();
+    await clearAllData();
+    await claimForAccount("acct-a");
+    await seed();
+
+    expect(await claimForAccount("acct-b")).toBe(true);
+    expect(await listCachedTracks()).toEqual([]);
+    expect(await listPlaylists()).toEqual([]);
+    expect(await listModelEvents()).toEqual([]);
+    expect(localStorage.getItem("drive-music-account")).toBe("acct-b");
 
     vi.unstubAllGlobals();
   });

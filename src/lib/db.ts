@@ -391,3 +391,21 @@ export async function clearAllData(): Promise<void> {
   }
   keysToRemove.forEach((key) => localStorage.removeItem(key));
 }
+
+const ACCOUNT_KEY = "drive-music-account";
+
+/** Ties the local data to one Google account. `accountKey` is a hashed id, never the raw email.
+ * No stored key means a first run (or data from before this check), so it belongs to whoever is
+ * signed in now and nothing is cleared. A different key wipes everything via clearAllData() and
+ * resolves true, so the caller can reload to drop in-memory state from the previous account. */
+export async function claimForAccount(accountKey: string): Promise<boolean> {
+  const stored = localStorage.getItem(ACCOUNT_KEY);
+  if (stored === accountKey) return false;
+  if (stored === null) {
+    localStorage.setItem(ACCOUNT_KEY, accountKey);
+    return false;
+  }
+  await clearAllData();
+  localStorage.setItem(ACCOUNT_KEY, accountKey);
+  return true;
+}
