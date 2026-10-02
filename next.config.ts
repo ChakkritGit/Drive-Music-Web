@@ -1,6 +1,22 @@
 import type { NextConfig } from "next";
 
+const OLD_HOST = "drive-music-taupe.vercel.app";
+const NEW_ORIGIN = "https://drive-music.chakkritton.com";
+
 const nextConfig: NextConfig = {
+  // The old host redirects here from the app, not from Vercel's domain settings, so /sw.js can be
+  // left out: a browser refuses a service worker script behind a redirect, and an installed old
+  // worker that can't update keeps serving its cached page on the old host forever.
+  async redirects() {
+    return [
+      {
+        source: "/:path((?!sw\\.js$).*)",
+        has: [{ type: "host", value: OLD_HOST }],
+        destination: `${NEW_ORIGIN}/:path`,
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {

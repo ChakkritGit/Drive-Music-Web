@@ -1,0 +1,26 @@
+# Drive Music
+
+> A personal music player for the audio files in your own Google Drive. It streams and caches tracks straight from Drive, mixes them like a DJ, and syncs what is playing across your devices. No server-side database, no ads, no tracking.
+
+Drive Music signs in with Google and asks only for read-only Drive access. Audio, playlists and the listening model stay on the device, in IndexedDB.
+
+## Features
+
+- Plays audio from your Google Drive, with offline downloads per track or in bulk
+- DJ-style auto mix: track analysis (BPM, key), beatmatching, crossfades and a per-transition editor
+- Gapless playback, volume normalization, a 3-band equalizer and spatial audio
+- Playlists, favorites, a Drive folder browser and an offline library with search
+- An on-device recommendation model that weights shuffle by what you actually listen to
+- Cross-device "now playing" sync and "Play here"
+- Eight themes, installable as an app (PWA)
+
+## Pages
+
+- [Home](https://drive-music.chakkritton.com/): sign in with Google and start listening
+- [Privacy Policy](https://drive-music.chakkritton.com/privacy): what is accessed and where it stays
+- [Terms of Service](https://drive-music.chakkritton.com/terms)
+
+## Related
+
+- [Author: Chakkrit Laolit](https://chakkritton.com)
+- [System status](https://status.chakkritton.com)

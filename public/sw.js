@@ -5,7 +5,23 @@ self.addEventListener("install", () => {
   self.skipWaiting();
 });
 
+// On the old host this worker exists only to retire itself: it unregisters, drops its caches,
+// and sends every open window to the same page on the new domain.
+const OLD_HOST = "drive-music-taupe.vercel.app";
+const NEW_ORIGIN = "https://drive-music.chakkritton.com";
+
 self.addEventListener("activate", (event) => {
+  if (self.location.hostname === OLD_HOST) {
+    event.waitUntil(
+      (async () => {
+        await Promise.all((await caches.keys()).map((key) => caches.delete(key)));
+        await self.registration.unregister();
+        const windows = await self.clients.matchAll({ type: "window" });
+        await Promise.all(windows.map((w) => w.navigate(NEW_ORIGIN + new URL(w.url).pathname)));
+      })(),
+    );
+    return;
+  }
   event.waitUntil(
     caches
       .keys()
@@ -17,6 +33,7 @@ self.addEventListener("activate", (event) => {
 // Auth/session endpoints must always hit the network fresh, and audio playback already reads
 // from IndexedDB, not this cache. Strategy per request type is noted at each branch.
 self.addEventListener("fetch", (event) => {
+  if (self.location.hostname === OLD_HOST) return;
   const { request } = event;
   if (request.method !== "GET") return;
 

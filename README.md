@@ -2,7 +2,7 @@
 
 A personal music player that streams and caches audio straight from your own Google Drive, with a full Web Audio processing chain, an on-device recommendation model, and cross-device sync — no server-side database, no ads, no tracking.
 
-**Live:** [drive-music-taupe.vercel.app](https://drive-music-taupe.vercel.app)
+**Live:** [drive-music.chakkritton.com](https://drive-music.chakkritton.com)
 
 ## Features
 
@@ -88,4 +88,4 @@ npm run party:deploy   # deploy the PartyKit worker
 
 ## License
 
-Personal project — see [Terms of Service](https://drive-music-taupe.vercel.app/terms) for usage terms.
+Personal project — see [Terms of Service](https://drive-music.chakkritton.com/terms) for usage terms.

@@ -20,7 +20,7 @@ const DESCRIPTION =
 
 export const metadata: Metadata = {
   // Absolute URLs for the OG image and canonical; the production host, not a preview one.
-  metadataBase: new URL("https://drive-music-taupe.vercel.app"),
+  metadataBase: new URL("https://drive-music.chakkritton.com"),
   title: { default: "Drive Music", template: "%s · Drive Music" },
   description: DESCRIPTION,
   applicationName: "Drive Music",
