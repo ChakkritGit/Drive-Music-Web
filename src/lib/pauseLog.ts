@@ -6,8 +6,21 @@
  * the browser on its own. Which one it was can't be told after the fact, so each stop is
  * written down as it happens and shown on /admin.
  */
-/** "error" is the element failing (no pause event at all); `detail` then carries MediaError's code. */
-export type PauseSource = "app" | "media-session" | "browser" | "error";
+/**
+ * Who stopped it. The app's own callers are named so a stop nobody remembers asking for can be
+ * traced: "sync" is Listen together following another device. "error" is the element failing (no
+ * pause event at all); `detail` then carries MediaError's code. "app" is from before the callers
+ * were named.
+ */
+export type PauseSource =
+  | "button"
+  | "space"
+  | "track-row"
+  | "sync"
+  | "media-session"
+  | "browser"
+  | "error"
+  | "app";
 
 export interface PauseEntry {
   at: number;

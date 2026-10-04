@@ -226,7 +226,8 @@ interface PlayerContextValue {
   play: (queue: DriveFile[], index: number, source?: PlaySource) => void;
   addToQueue: (file: DriveFile) => void;
   removeFromQueue: (index: number) => void;
-  togglePlay: () => void;
+  /** `source` names who asked, for the stop log; a click handler passes its event, read as "button". */
+  togglePlay: (source?: unknown) => void;
   next: () => void;
   prev: () => void;
   seek: (seconds: number) => void;
@@ -584,8 +585,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // quiet track above 1.0 — HTMLMediaElement.volume alone caps at 1.0, so it can only ever turn
   // loud tracks down (see src/lib/loudness.ts).
   const audioContextRef = useRef<AudioContext | null>(null);
-  /** Who asked for the next pause; read and cleared by handlePause. Unset means the browser. */
-  const pauseSourceRef = useRef<PauseSource | null>(null);
+  /** Who last asked for a pause, and when. handlePause credits them only if the pause follows
+   * within a second; otherwise a stale request would take the blame for the browser's pause. */
+  const pauseRequestRef = useRef<{ source: PauseSource; at: number } | null>(null);
   const gainARef = useRef<GainNode | null>(null);
   const gainBRef = useRef<GainNode | null>(null);
   const chainARef = useRef<SlotChain | null>(null);
@@ -1616,7 +1618,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [queue, currentIndex, showToast, cancelCrossfade],
   );
 
-  const togglePlay = useCallback(() => {
+  const togglePlay = useCallback((source?: unknown) => {
     const audio = getActiveAudio();
     if (!audio) return;
     if (audio.paused) {
@@ -1631,7 +1633,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Pausing mid-crossfade would otherwise leave the inactive element silently playing (or
       // stuck at a partial volume) — simplest correct behavior is to cut the fade short.
       cancelCrossfade();
-      pauseSourceRef.current ??= "app";
+      pauseRequestRef.current = { source: typeof source === "string" ? (source as PauseSource) : "button", at: performance.now() };
       audio.pause();
     }
   }, [getActiveAudio, cancelCrossfade, getGainNode, currentFile, volume, trackGain]);
@@ -1655,7 +1657,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       e.preventDefault(); // stop the page from scrolling on Space
       if (e.repeat) return; // held down — keep suppressing scroll, but don't toggle repeatedly
-      togglePlay();
+      togglePlay("space");
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -2502,8 +2504,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     navigator.mediaSession.setActionHandler("pause", () => {
       const audio = getActiveAudio();
       if (!audio || audio.paused) return;
-      pauseSourceRef.current = "media-session";
-      togglePlay();
+      togglePlay("media-session");
     });
     navigator.mediaSession.setActionHandler("previoustrack", () => prev());
     navigator.mediaSession.setActionHandler("nexttrack", () => next());
@@ -2823,14 +2824,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // that is the queue's playback state.
       if (isPreviewingRef.current) return;
       // A track reaching its end pauses too; only stops before the end are worth a line.
+      const request = pauseRequestRef.current;
+      const asked = request && performance.now() - request.at < 1000 ? request.source : null;
       if (!e.currentTarget.ended) recordPause({
         at: Date.now(),
         position: e.currentTarget.currentTime,
-        source: pauseSourceRef.current ?? "browser",
+        source: asked ?? "browser",
         hidden: document.hidden,
         audio: audioContextRef.current?.state ?? "none",
       });
-      pauseSourceRef.current = null;
+      pauseRequestRef.current = null;
       setIsPlaying(false);
       persistSession(progressRef.current);
     },

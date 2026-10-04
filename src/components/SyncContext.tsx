@@ -13,6 +13,7 @@ import { useSession } from "next-auth/react";
 import usePartySocket from "partysocket/react";
 import type { SyncState } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
+import { follow, type Seen } from "@/lib/follow";
 
 // Structural changes (track, play/pause, source) publish immediately; a still-playing track's
 // progress otherwise only re-publishes at most this often, so "now playing" catches up on
@@ -233,7 +234,13 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   }, [remoteNowPlaying]);
 
   const [synced, setSynced] = useState(false);
-  const toggleSynced = useCallback(() => setSynced((s) => !s), []);
+  /** The remote state last acted on; see follow() for why changes, not levels, are followed. */
+  const followedRef = useRef<Seen | null>(null);
+  const toggleSynced = useCallback(() => {
+    // Turning it on adopts the other device's state outright, once.
+    followedRef.current = null;
+    setSynced((s) => !s);
+  }, []);
 
   // "Listen together": apply every incoming broadcast to local playback instead of just
   // showing it in the banner. Runs on every new remoteNowPlaying (at minimum every
@@ -246,11 +253,15 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     if (!remoteFile) return;
     const local = playerRef.current;
 
-    if (local.currentFile?.id !== remoteFile.id) {
-      local.play(remote.queue, remote.currentIndex, remote.source ?? undefined);
-      return; // let the next broadcast reconcile play/pause + position once loaded
-    }
-    if (remote.isPlaying !== local.isPlaying) local.togglePlay();
+    const decision = follow(
+      followedRef.current,
+      { fileId: remoteFile.id, isPlaying: remote.isPlaying },
+      { fileId: local.currentFile?.id, isPlaying: local.isPlaying },
+    );
+    followedRef.current = decision.followed;
+    if (decision.action === "load") local.play(remote.queue, remote.currentIndex, remote.source ?? undefined);
+    if (decision.action === "toggle") local.togglePlay("sync");
+    if (decision.action !== "track-position") return;
 
     const estimatedRemoteProgress = remote.isPlaying
       ? remote.progress + Math.max(0, (Date.now() - remote.updatedAt) / 1000)

@@ -49,7 +49,7 @@ export function TrackRow({
   const subtitle = [meta?.artist, meta?.album].filter(Boolean).join(" · ");
 
   const handleSelect = () => {
-    if (isCurrent) togglePlay();
+    if (isCurrent) togglePlay("track-row");
     else play(queue, index, source);
   };
 

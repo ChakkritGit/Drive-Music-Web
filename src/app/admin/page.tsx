@@ -986,10 +986,14 @@ function AdminDashboard() {
 }
 
 const PAUSE_SOURCE_LABEL: Record<PauseEntry["source"], string> = {
-  app: "In the app",
+  button: "Play/pause button",
+  space: "Space bar",
+  "track-row": "Tapped the playing track",
+  sync: "Listen together (another device)",
   "media-session": "Media controls",
   browser: "Browser / system",
   error: "Playback error",
+  app: "In the app (before callers were named)",
 };
 
 /** Every time playback stopped, and who stopped it - for tracking down "it just stopped". */
