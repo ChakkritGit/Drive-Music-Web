@@ -132,7 +132,7 @@ export function HomeView() {
           </p>
           <Link
             href="/browse"
-            className="mt-5 inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:outline-none"
+            className="mt-5 inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent/85 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:outline-none"
           >
             <FolderOpen className="h-4 w-4" /> Browse your Drive
           </Link>
@@ -245,7 +245,7 @@ function Hero({
         <div className="mt-5 flex flex-wrap gap-2">
           <button
             onClick={primary.onClick}
-            className="inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:outline-none"
+            className="inline-flex h-10 min-w-32 items-center justify-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent/85 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
           >
             {primary.icon}
             {primary.label}
@@ -273,7 +273,7 @@ function Section({ title, href, children }: { title: string; href?: string; chil
           </Link>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{children}</div>
+      <div className="stagger grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{children}</div>
     </section>
   );
 }

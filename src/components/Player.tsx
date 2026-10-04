@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
   ListMusic,
-  MonitorSpeaker,
   Music,
   Repeat,
   Repeat1,
@@ -20,6 +19,9 @@ import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
 import { PlayPauseIcon } from "@/components/PlayPauseIcon";
 import { useSync } from "@/components/SyncContext";
+import { DevicePicker } from "@/components/DevicePicker";
+import { TrackRow } from "@/components/TrackRow";
+import { TransitionChip } from "@/components/TransitionChip";
 
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -30,7 +32,7 @@ function formatTime(sec: number): string {
 
 // Routes inside the (app) route group (see app/(app)/layout.tsx's NAV_ITEMS) — the only ones
 // that render the mobile bottom tab nav.
-const APP_GROUP_ROUTES = ["/", "/browse", "/playlists", "/library", "/settings"];
+const APP_GROUP_ROUTES = ["/", "/browse", "/playlists", "/library", "/settings", "/admin"];
 
 // Legal pages are standalone documents (also linked from the signed-out screen) — the playback
 // bar has nothing to do with reading them, so it stays out of the way entirely there.
@@ -51,7 +53,6 @@ export function Player() {
     shuffle,
     loopMode,
     upNext,
-    play,
     togglePlay,
     next,
     prev,
@@ -60,8 +61,10 @@ export function Player() {
     toggleShuffle,
     cycleLoopMode,
     expand,
+    cachedTracks,
+    removeFromQueue,
   } = usePlayer();
-  const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
+  const { remoteNowPlaying, synced, chooseMode, mode, leaderName } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
   // Only surface what's playing on another device while this one isn't actively playing —
@@ -99,6 +102,53 @@ export function Player() {
   }
 
   return (
+    <>
+    {/* The queue opens as a panel on the right, outside the bar: the bar's backdrop blur would
+        otherwise make it the panel's containing block. */}
+    {showUpNext && (
+      <aside
+        aria-label="Up next"
+        className={clsx(
+          "fixed top-0 right-0 z-30 flex w-full max-w-sm animate-[slideInRight_220ms_ease-out] flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950",
+          hasBottomNav ? "bottom-[calc(8.5rem+env(safe-area-inset-bottom))] lg:bottom-24" : "bottom-24",
+        )}
+      >
+        <div className="flex items-center justify-between px-5 pt-5 pb-3">
+          <h2 className="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Up next</h2>
+          <button
+            onClick={() => setShowUpNext(false)}
+            className="grid h-9 w-9 place-items-center rounded-full text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-50"
+            aria-label="Close up next"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {currentFile && upNext.length > 0 && (
+          <div className="px-5 pb-2">
+            <TransitionChip from={currentFile} to={upNext[0].file} />
+          </div>
+        )}
+        {upNext.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-zinc-500 dark:text-zinc-400">Nothing queued after this track.</p>
+        ) : (
+          <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-4">
+            {upNext.map(({ file, index }, position) => (
+              <TrackRow
+                key={`${file.id}-${index}`}
+                file={file}
+                queue={queue}
+                index={index}
+                source={currentSource ?? undefined}
+                cachedTrack={cachedTracks.get(file.id)}
+                nextFile={upNext[position + 1]?.file}
+                onRemove={() => removeFromQueue(index)}
+                removeLabel="Remove from queue"
+              />
+            ))}
+          </ul>
+        )}
+      </aside>
+    )}
     <div
       className={clsx(
         "fixed inset-x-0 z-20 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95",
@@ -108,45 +158,6 @@ export function Player() {
           : "bottom-0",
       )}
     >
-      {showUpNext && upNext.length > 0 && (
-        <div className="absolute inset-x-0 bottom-full mb-3 flex justify-center px-4">
-          <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-2.5 dark:border-zinc-900">
-              <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
-                Up Next
-              </p>
-              <button
-                onClick={() => setShowUpNext(false)}
-                className="cursor-pointer rounded-full p-1 text-zinc-400 transition hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                aria-label="Close up next"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <ul className="max-h-64 divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-900">
-              {upNext.slice(0, 5).map(({ file, index }) => (
-                <li key={`${file.id}-${index}`}>
-                  <button
-                    onClick={() => {
-                      play(queue, index, currentSource ?? undefined);
-                      setShowUpNext(false);
-                    }}
-                    className="flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                  >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-400 dark:bg-zinc-800">
-                      <Music className="h-3.5 w-3.5" />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-300">
-                      {file.name.replace(/\.[^./]+$/, "")}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
-
       {/* Phones: the progress is a hairline along the top edge; the full slider lives in Now Playing. */}
       <div className="absolute inset-x-0 top-0 h-0.5 bg-zinc-200 lg:hidden dark:bg-zinc-800" aria-hidden="true">
         <div className="h-full bg-accent" style={{ width: `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` }} />
@@ -189,6 +200,8 @@ export function Player() {
                 <span className="text-red-500">{error}</span>
               ) : remoteTrack ? (
                 `Playing on ${remoteTrack.deviceName}`
+              ) : mode === "follow" ? (
+                `Muted here · sound on ${leaderName ?? "another device"}`
               ) : synced && remoteNowPlaying ? (
                 `Synced with ${remoteNowPlaying.deviceName}`
               ) : (
@@ -203,8 +216,9 @@ export function Player() {
           <div className="flex items-center gap-1 lg:gap-2">
             {remoteTrack ? (
               <button
-                onClick={toggleSynced}
-                className="flex h-10 cursor-pointer items-center gap-1.5 rounded-full bg-accent px-4 text-xs font-semibold text-zinc-950 transition hover:brightness-95"
+                // Hear what the other device is playing here; it carries on in step, muted.
+                onClick={() => chooseMode("lead")}
+                className="flex h-10 cursor-pointer items-center gap-1.5 rounded-full bg-accent px-4 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent/85"
               >
                 <Users className="h-3.5 w-3.5" /> Listen together
               </button>
@@ -263,15 +277,7 @@ export function Player() {
         {/* Right: listening on other devices, the queue, then volume at the far edge. Desktop only;
             on a phone these live in Now Playing. */}
         <div className="hidden items-center justify-end gap-1 lg:flex">
-          {syncAvailable && (
-            <IconButton
-              onClick={toggleSynced}
-              label={synced ? "Stop listening together" : "Listen together"}
-              active={synced}
-            >
-              <MonitorSpeaker className="h-[18px] w-[18px]" />
-            </IconButton>
-          )}
+          <DevicePicker />
           <IconButton
             onClick={() => setShowUpNext((v) => !v)}
             disabled={upNext.length === 0}
@@ -295,6 +301,7 @@ export function Player() {
         </div>
       </div>
     </div>
+    </>
   );
 }
 

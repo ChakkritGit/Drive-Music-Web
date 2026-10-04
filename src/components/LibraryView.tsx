@@ -82,7 +82,7 @@ export function LibraryView() {
       ) : visibleTracks.length === 0 ? (
         <EmptyState>No downloaded tracks match &quot;{query}&quot;.</EmptyState>
       ) : (
-        <ul className="flex flex-col">
+        <ul className="stagger flex flex-col">
           {visibleTracks.map(({ t, index }, position) => (
             <TrackRow
               key={t.fileId}

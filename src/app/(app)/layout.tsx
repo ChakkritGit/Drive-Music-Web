@@ -123,7 +123,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           onScroll={handleMainScroll}
           className="min-h-0 flex-1 overflow-y-auto pb-[calc(12rem+env(safe-area-inset-bottom))] lg:pb-32"
         >
-          {children}
+          {/* Keyed by the path, so each page change plays the entrance. */}
+          <div key={pathname} className="page-in">
+            {children}
+          </div>
         </main>
       </div>
 

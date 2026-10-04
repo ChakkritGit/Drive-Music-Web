@@ -7,6 +7,7 @@ import type { DriveFile, PlaySource, TrackAnalysis } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { useToast } from "@/components/ToastContext";
 import { sequenceTracks } from "@/lib/sequence";
+import { PILL_OUTLINE } from "@/components/ui";
 
 /**
  * "Auto mix set" — orders a collection so each track runs into the next, then plays it.
@@ -96,18 +97,19 @@ export function SequenceMixButton({
       className={clsx(
         // No margin of its own: this sits in a row beside Download all in one place and beside
         // Shuffle play in another, and the two rows space themselves differently.
-        "flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-xs text-zinc-600 transition active:scale-95 hover:bg-zinc-50 disabled:active:scale-100 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900",
+        // The same outline pill as every page's secondary action, so it lines up beside Play.
+        PILL_OUTLINE,
         className,
       )}
     >
       {progress ? (
         <>
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 className="h-4 w-4 animate-spin" />
           Analyzing… {progress.done}/{progress.total}
         </>
       ) : (
         <>
-          <Wand2 className="h-3.5 w-3.5 text-accent-strong" />
+          <Wand2 className="h-4 w-4 text-accent-strong" />
           Auto mix set
         </>
       )}

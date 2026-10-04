@@ -157,4 +157,9 @@ export interface SyncState {
   deviceId: string;
   deviceName: string;
   updatedAt: number;
+  /** The device whose speakers play while devices are synced; the others follow silently. Set by
+   * that device itself, and repeated by its followers. Absent when nobody is leading. */
+  audioOn?: string;
+  /** When the leading device chose to lead, so two devices that both choose it settle on the later. */
+  leadSince?: number;
 }

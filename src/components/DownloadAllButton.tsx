@@ -3,6 +3,7 @@
 import { CloudCheck, Download, Loader2 } from "lucide-react";
 import type { DriveFile } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
+import { PILL_OUTLINE } from "@/components/ui";
 
 export function DownloadAllButton({ files }: { files: DriveFile[] }) {
   const { cachedTracks, downloadProgress, downloadAll } = usePlayer();
@@ -24,16 +25,16 @@ export function DownloadAllButton({ files }: { files: DriveFile[] }) {
     <button
       onClick={() => downloadAll(files)}
       disabled={isRunning}
-      className="mb-4 flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-xs text-zinc-600 transition hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+      className={`mb-4 ${PILL_OUTLINE}`}
     >
       {isRunning ? (
         <>
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 className="h-4 w-4 animate-spin" />
           Downloading… {downloadProgress.done}/{downloadProgress.total}
         </>
       ) : (
         <>
-          <Download className="h-3.5 w-3.5" />
+          <Download className="h-4 w-4" />
           Download all ({remaining})
         </>
       )}

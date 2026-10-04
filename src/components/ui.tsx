@@ -8,7 +8,7 @@ export const PAGE = "mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-10 lg:py-8";
 
 /** The main action of a page: an accent pill with dark text (white on this orange fails contrast). */
 export const PILL_PRIMARY =
-  "inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-40";
+  "inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent/85 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:opacity-40";
 
 /** A secondary action next to it. */
 export const PILL_OUTLINE =

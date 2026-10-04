@@ -21,7 +21,7 @@ export function SignInScreen() {
         </p>
         <button
           onClick={() => signIn("google")}
-          className="mt-6 h-11 w-full rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:outline-none"
+          className="mt-6 h-11 w-full rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent/85 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
         >
           Sign in with Google
         </button>

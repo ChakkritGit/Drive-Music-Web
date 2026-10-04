@@ -54,7 +54,7 @@ export function PlaylistsView({ onOpen }: { onOpen: (playlist: Playlist) => void
           No playlists yet. Name one above, or add a track to a new playlist from its menu.
         </EmptyState>
       ) : (
-        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        <div className="stagger grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {playlists.map((p) => {
             const favorites = p.name === FAVORITES_PLAYLIST_NAME;
             return (

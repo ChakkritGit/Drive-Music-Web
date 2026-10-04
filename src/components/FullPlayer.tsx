@@ -65,7 +65,7 @@ export function FullPlayer() {
     analyses,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
-  const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
+  const { remoteNowPlaying, synced, toggleSynced, syncAvailable, mode, leaderName } = useSync();
 
   const mixSummary = currentFile ? analysisSummary(analyses.get(currentFile.id)) : "";
   // Whether the mix engine is set up for this track — both switches on, and something loaded.
@@ -246,7 +246,10 @@ export function FullPlayer() {
             )}
             {synced && remoteNowPlaying && (
               <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent-strong">
-                <Users className="h-3 w-3" /> Synced with {remoteNowPlaying.deviceName}
+                <Users className="h-3 w-3" />
+                {mode === "follow"
+                  ? `Muted here · sound on ${leaderName ?? remoteNowPlaying.deviceName}`
+                  : `Synced with ${remoteNowPlaying.deviceName}, muted there`}
               </p>
             )}
           </div>

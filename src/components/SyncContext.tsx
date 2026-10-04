@@ -14,6 +14,7 @@ import usePartySocket from "partysocket/react";
 import type { SyncState } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { follow, type Seen } from "@/lib/follow";
+import { syncMode, type SyncMode } from "@/lib/syncMode";
 
 // Structural changes (track, play/pause, source) publish immediately; a still-playing track's
 // progress otherwise only re-publishes at most this often, so "now playing" catches up on
@@ -65,13 +66,20 @@ function getOrCreateDeviceId(): string {
   return id;
 }
 
+
 interface SyncContextValue {
   /** The latest broadcast from a *different* device, or null if nothing's playing elsewhere
    * (or we haven't heard from another device yet). */
   remoteNowPlaying: SyncState | null;
-  /** Whether this device is in "Listen together" mode — see the reconciliation effect below. */
+  /** Whether this device is synced at all (leading or following). */
   synced: boolean;
+  /** Solo or leading; the quick toggle the phone's Now Playing uses. */
   toggleSynced: () => void;
+  mode: SyncMode;
+  /** "solo" plays here alone; "lead" keeps the other device in step with only this one heard. */
+  chooseMode: (mode: "solo" | "lead") => void;
+  /** The leading device's name while following. */
+  leaderName: string | null;
   /** Whether sync is configured at all (a PartyKit host is set) — lets UI hide sync controls
    * entirely rather than show a toggle that can never connect. */
   syncAvailable: boolean;
@@ -173,11 +181,57 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     },
   });
 
+  const [chosen, setChosen] = useState<"solo" | "lead">("solo");
+  const [leadSince, setLeadSince] = useState(0);
+  /** The lead (by its leadSince) this device stepped out of to play on its own. */
+  const [optedOutOf, setOptedOutOf] = useState<number | null>(null);
+  /** The remote state last acted on; see follow() for why changes, not levels, are followed. */
+  const followedRef = useRef<Seen | null>(null);
+  /** Set by the user's own choice, so the mode change it causes is not mistaken for the leader leaving. */
+  const choseRef = useRef(false);
+  const chooseMode = useCallback((next: "solo" | "lead") => {
+    choseRef.current = true;
+    // Joining adopts the other device's state outright, once.
+    followedRef.current = null;
+    setChosen(next);
+    if (next === "lead") setLeadSince(Date.now());
+    // Leaving a follow for "this device only" must stop following that lead, or the leader's next
+    // broadcast would pull this device straight back in.
+    if (next === "solo" && remoteNowPlaying?.audioOn === remoteNowPlaying?.deviceId) {
+      setOptedOutOf(remoteNowPlaying?.leadSince ?? 0);
+    }
+  }, [remoteNowPlaying]);
+  const toggleSynced = useCallback(() => chooseMode(chosen === "solo" ? "lead" : "solo"), [chosen, chooseMode]);
+
+  // Following is derived, not stored: another device's own broadcast says it leads. If both chose
+  // to lead, the later choice wins and the other follows.
+  const { mode, leaderId } = syncMode({ chosen, leadSince, optedOutOf, remote: remoteNowPlaying });
+  const remoteLeader = leaderId ? remoteNowPlaying : null;
+  const synced = mode !== "solo";
+
+  // A follower is heard nowhere: only the leader's speakers play.
+  useEffect(() => {
+    playerRef.current.setOutputMuted(mode === "follow");
+  }, [mode]);
+
+  // When the leader stops leading (or goes quiet), a follower stops too, rather than suddenly
+  // being heard. A follower that chose to play here itself carries on.
+  const previousModeRef = useRef<SyncMode>(mode);
+  useEffect(() => {
+    const was = previousModeRef.current;
+    previousModeRef.current = mode;
+    const chose = choseRef.current;
+    choseRef.current = false;
+    if (was === "follow" && mode === "solo" && !chose && playerRef.current.isPlaying) {
+      playerRef.current.togglePlay("sync");
+    }
+  }, [mode]);
+
   useEffect(() => {
     if (status !== "authenticated" || !roomId || !hostConfigured) return;
     if (!player.currentFile) return; // nothing loaded here yet — don't publish an empty state
 
-    const structuralKey = `${player.currentFile.id}:${player.isPlaying}:${player.currentSource?.id ?? ""}`;
+    const structuralKey = `${player.currentFile.id}:${player.isPlaying}:${player.currentSource?.id ?? ""}:${mode}`;
     const now = Date.now();
     const isStructuralChange = structuralKey !== lastPublishedKeyRef.current;
     if (
@@ -201,6 +255,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       deviceId,
       deviceName,
       updatedAt: now,
+      // Who is heard: this device while leading; while following, the leader (repeated, so the
+      // leader's choice is not overturned by this device's broadcast).
+      audioOn: mode === "lead" ? deviceId : mode === "follow" ? remoteLeader?.deviceId : undefined,
+      leadSince: mode === "lead" ? leadSince : undefined,
     };
     socket.send(JSON.stringify(state));
   }, [
@@ -218,6 +276,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     deviceName,
     socket,
     heartbeatTick,
+    mode,
+    leadSince,
+    remoteLeader?.deviceId,
   ]);
 
   // Broadcasts from a device that's gone quiet (closed tab, lost network, ...) never get a
@@ -233,14 +294,6 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [remoteNowPlaying]);
 
-  const [synced, setSynced] = useState(false);
-  /** The remote state last acted on; see follow() for why changes, not levels, are followed. */
-  const followedRef = useRef<Seen | null>(null);
-  const toggleSynced = useCallback(() => {
-    // Turning it on adopts the other device's state outright, once.
-    followedRef.current = null;
-    setSynced((s) => !s);
-  }, []);
 
   // "Listen together": apply every incoming broadcast to local playback instead of just
   // showing it in the banner. Runs on every new remoteNowPlaying (at minimum every
@@ -272,8 +325,16 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   }, [synced, remoteNowPlaying]);
 
   const value = useMemo<SyncContextValue>(
-    () => ({ remoteNowPlaying, synced, toggleSynced, syncAvailable: hostConfigured }),
-    [remoteNowPlaying, synced, toggleSynced, hostConfigured],
+    () => ({
+      remoteNowPlaying,
+      synced,
+      toggleSynced,
+      mode,
+      chooseMode,
+      leaderName: mode === "follow" ? (remoteLeader?.deviceName ?? null) : null,
+      syncAvailable: hostConfigured,
+    }),
+    [remoteNowPlaying, synced, toggleSynced, mode, chooseMode, remoteLeader, hostConfigured],
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSession } from "next-auth/react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, PlayCircle } from "lucide-react";
-import { SignInScreen } from "@/components/SignInScreen";
+import { ChevronLeft, ChevronRight, Download, PlayCircle } from "lucide-react";
+import { PILL_OUTLINE, PageHeader } from "@/components/ui";
 import { FEATURE_GROUPS, FEATURE_SIZE } from "@/lib/features";
 import { HIDDEN_SIZE } from "@/lib/model";
 import { qualityTier } from "@/lib/analysis";
@@ -75,21 +73,8 @@ function downloadModel(model: ListeningModel): void {
   URL.revokeObjectURL(url);
 }
 
+// Inside the (app) shell, which owns the sign-in gate and the scrolling.
 export default function AdminPage() {
-  const { data: session, status } = useSession();
-
-  if (status === "loading") {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
-        Loading…
-      </div>
-    );
-  }
-
-  if (!session) {
-    return <SignInScreen />;
-  }
-
   return <AdminDashboard />;
 }
 
@@ -777,27 +762,18 @@ function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-6 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
-        <div className="mb-6 grid grid-cols-[auto_1fr_auto] items-center gap-2">
-          <Link
-            href="/"
-            className="flex shrink-0 items-center gap-1.5 text-sm text-zinc-500 hover:underline dark:text-zinc-400"
-          >
-            <ArrowLeft className="h-4 w-4" /> Back
-          </Link>
-          <h1 className="truncate text-center text-base font-medium text-zinc-900 sm:text-lg dark:text-zinc-50">
-            Analytics
-          </h1>
-          <button
-            onClick={() => downloadModel(model)}
-            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-sm whitespace-nowrap text-white transition hover:opacity-90 disabled:cursor-default disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            <Download className="h-4 w-4" />{" "}
-            <span className="hidden sm:inline">Export model</span>
-            <span className="sm:hidden">Export</span>
-          </button>
-        </div>
+    <div>
+      <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
+        <PageHeader
+          eyebrow="Your listening"
+          title="Analytics"
+          meta="What the on-device model has learned, and what is stored here."
+          actions={
+            <button onClick={() => downloadModel(model)} className={PILL_OUTLINE}>
+              <Download className="h-4 w-4" /> Export model
+            </button>
+          }
+        />
 
         <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
           <StatTile label="Cached tracks" value={String(cachedTracks.length)} />

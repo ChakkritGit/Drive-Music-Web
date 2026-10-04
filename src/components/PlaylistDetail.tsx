@@ -67,7 +67,7 @@ export function PlaylistDetail({ playlist, onBack }: { playlist: Playlist; onBac
       ) : visibleTracks.length === 0 ? (
         <EmptyState>No tracks match &quot;{query}&quot;.</EmptyState>
       ) : (
-        <ul className="flex flex-col">
+        <ul className="stagger flex flex-col">
           {visibleTracks.map(({ file, index }, position) => (
             <TrackRow
               key={`${file.id}-${index}`}

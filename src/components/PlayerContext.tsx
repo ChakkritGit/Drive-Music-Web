@@ -228,6 +228,9 @@ interface PlayerContextValue {
   removeFromQueue: (index: number) => void;
   /** `source` names who asked, for the stop log; a click handler passes its event, read as "button". */
   togglePlay: (source?: unknown) => void;
+  /** Silences this device's output without touching the volume or pausing: a device following
+   * another in sync keeps playing in step, but only the other one is heard. */
+  setOutputMuted: (muted: boolean) => void;
   next: () => void;
   prev: () => void;
   seek: (seconds: number) => void;
@@ -2849,8 +2852,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [getActiveAudio, cancelCrossfade, persistSession],
   );
 
+  // `muted` on the elements, not a gain: it holds through every gain the mixing code writes.
+  const setOutputMuted = useCallback((muted: boolean) => {
+    for (const el of [audioARef.current, audioBRef.current]) if (el) el.muted = muted;
+  }, []);
+
   const value = useMemo<PlayerContextValue>(
     () => ({
+      setOutputMuted,
       queue,
       currentFile,
       currentMeta,
@@ -2927,6 +2936,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       collapse,
     }),
     [
+      setOutputMuted,
       queue,
       currentFile,
       currentMeta,

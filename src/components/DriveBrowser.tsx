@@ -85,7 +85,7 @@ export function DriveBrowser() {
 
       {!loading && !error && audioFiles.length > 0 && <DownloadAllButton files={audioFiles} />}
 
-      <ul className="flex flex-col">
+      <ul className="stagger flex flex-col">
         {items.map((file, position) =>
           isFolder(file) ? (
             <li key={file.id}>
