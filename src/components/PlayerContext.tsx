@@ -2781,6 +2781,26 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [getActiveAudio],
   );
 
+  // A media error stops playback without any `pause` event, so it would never reach the log.
+  const handleError = useCallback(
+    (e: React.SyntheticEvent<HTMLAudioElement>) => {
+      const el = e.currentTarget;
+      // An element emptied on purpose (src removed between tracks) reports an error too.
+      if (el !== getActiveAudio() || !el.getAttribute("src")) return;
+      const err = el.error;
+      const names = ["", "aborted", "network", "decode", "unsupported"];
+      recordPause({
+        at: Date.now(),
+        position: el.currentTime,
+        source: "error",
+        hidden: document.hidden,
+        audio: audioContextRef.current?.state ?? "none",
+        detail: err ? `${err.code} ${names[err.code] ?? ""} ${err.message}`.trim() : "unknown",
+      });
+    },
+    [getActiveAudio],
+  );
+
   const handlePause = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       if (e.currentTarget !== getActiveAudio()) return;
@@ -2982,6 +3002,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         onEnded={handleEnded}
         onPlay={handlePlay}
         onPause={handlePause}
+        onError={handleError}
         // Buffer aggressively: an armed gapless track has to be fully decoded and ready to
         // start the instant the current one ends, and the default ("metadata" in some
         // browsers) would only fetch the header.
@@ -2995,6 +3016,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         onEnded={handleEnded}
         onPlay={handlePlay}
         onPause={handlePause}
+        onError={handleError}
         // Buffer aggressively: an armed gapless track has to be fully decoded and ready to
         // start the instant the current one ends, and the default ("metadata" in some
         // browsers) would only fetch the header.

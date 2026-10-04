@@ -6,7 +6,8 @@
  * the browser on its own. Which one it was can't be told after the fact, so each stop is
  * written down as it happens and shown on /admin.
  */
-export type PauseSource = "app" | "media-session" | "browser";
+/** "error" is the element failing (no pause event at all); `detail` then carries MediaError's code. */
+export type PauseSource = "app" | "media-session" | "browser" | "error";
 
 export interface PauseEntry {
   at: number;
@@ -16,6 +17,8 @@ export interface PauseEntry {
   hidden: boolean;
   /** The shared AudioContext's state at that moment, or "none" before the graph exists. */
   audio: string;
+  /** For an error: "1 aborted", "2 network", "3 decode", "4 unsupported", plus the browser's message. */
+  detail?: string;
 }
 
 const KEY = "drive-music-pause-log";

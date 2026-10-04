@@ -989,6 +989,7 @@ const PAUSE_SOURCE_LABEL: Record<PauseEntry["source"], string> = {
   app: "In the app",
   "media-session": "Media controls",
   browser: "Browser / system",
+  error: "Playback error",
 };
 
 /** Every time playback stopped, and who stopped it - for tracking down "it just stopped". */
@@ -1002,7 +1003,8 @@ function PauseLogSection() {
     <section className="mb-8 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
       <h2 className="mb-1 text-sm font-medium text-zinc-500 dark:text-zinc-400">Playback stops</h2>
       <p className="mb-4 text-xs text-zinc-400">
-        The last 30 pauses. &quot;Browser / system&quot; means nothing in the app asked for it.
+        The last 30 stops. &quot;Browser / system&quot; means nothing in the app asked for it;
+        &quot;Playback error&quot; means the audio element itself failed.
       </p>
       {log.length === 0 ? (
         <p className="text-sm text-zinc-400">No pauses recorded yet.</p>
@@ -1015,6 +1017,7 @@ function PauseLogSection() {
                 {new Date(e.at).toLocaleString()} · at {Math.floor(e.position / 60)}:
                 {String(Math.floor(e.position % 60)).padStart(2, "0")} · {e.hidden ? "tab hidden" : "tab visible"} ·
                 audio {e.audio}
+                {e.detail ? ` · ${e.detail}` : ""}
               </span>
             </li>
           ))}
