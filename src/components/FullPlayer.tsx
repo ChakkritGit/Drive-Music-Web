@@ -167,7 +167,7 @@ export function FullPlayer() {
           as a vignette around the viewport if the layer stopped any closer in. */}
       <div
         ref={glowRef}
-        className="pointer-events-none absolute -inset-40 animate-[breathe_30s_ease-in-out_infinite] bg-cover bg-center blur-[100px]"
+        className="pointer-events-none absolute -inset-40 animate-[breathe_30s_ease-in-out_infinite] bg-cover bg-center opacity-80 blur-[100px]"
         style={{
           backgroundColor: glowColor,
           backgroundImage: currentMeta?.pictureDataUrl
@@ -180,17 +180,17 @@ export function FullPlayer() {
       <div className="relative flex items-center justify-between px-6 py-4">
         <button
           onClick={collapse}
-          className="rounded-full p-2 text-zinc-500 transition active:scale-90 dark:text-zinc-400 dark:hover:bg-zinc-900 hover:bg-zinc-100"
+          className="grid h-10 w-10 place-items-center rounded-full text-zinc-500 transition hover:bg-zinc-950/5 active:scale-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none dark:text-zinc-400 dark:hover:bg-white/10"
           aria-label="Collapse player"
         >
           <ChevronDown className="h-5 w-5" />
         </button>
-        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs font-semibold tracking-wider text-zinc-500 uppercase dark:text-zinc-400">
           Now Playing
         </p>
         {/* Balances the collapse button on the left so "Now Playing" stays centred — the
             actions that used to sit here now live under the transport controls. */}
-        <div className="w-9" />
+        <div className="w-10" />
       </div>
 
       <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
@@ -220,12 +220,12 @@ export function FullPlayer() {
           {/* Left-aligned: centring the title made it drift as the text length changed, and it
               read as unrelated to the favorite button sharing the row. */}
           <div className="min-w-0 flex-1 text-left">
-            <p className="truncate text-lg font-medium text-zinc-900 dark:text-zinc-50">
+            <p className="truncate text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
               {currentFile
                 ? currentMeta?.title || currentFile.name
                 : "No track playing"}
             </p>
-            <p className="mt-1 truncate text-sm text-zinc-400">
+            <p className="mt-1 truncate text-sm text-zinc-600 dark:text-zinc-400">
               {error ? (
                 <span className="text-red-500">{error}</span>
               ) : (
@@ -235,7 +235,7 @@ export function FullPlayer() {
               )}
             </p>
             {currentSource && (
-              <p className="mt-0.5 truncate text-xs text-zinc-400">
+              <p className="mt-0.5 truncate text-xs text-zinc-500">
                 Playing from {currentSource.name}
               </p>
             )}
@@ -245,7 +245,7 @@ export function FullPlayer() {
               <p className="mt-0.5 truncate text-xs tabular-nums text-zinc-400">{mixSummary}</p>
             )}
             {synced && remoteNowPlaying && (
-              <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent">
+              <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent-strong">
                 <Users className="h-3 w-3" /> Synced with {remoteNowPlaying.deviceName}
               </p>
             )}
@@ -281,9 +281,11 @@ export function FullPlayer() {
             step={0.1}
             value={Math.min(progress, duration || 0)}
             onChange={(e) => seek(Number(e.target.value))}
-            className="w-full accent-accent"
+            className="seek w-full"
+            style={{ "--pct": `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` } as React.CSSProperties}
+            aria-label="Seek"
           />
-          <div className="flex justify-between text-xs text-zinc-400">
+          <div className="mt-1 flex justify-between text-xs text-zinc-500 dark:text-zinc-400">
             <span className="tabular-nums">{formatTime(progress)}</span>
             <span className="tabular-nums">{formatTime(duration)}</span>
           </div>
@@ -295,7 +297,7 @@ export function FullPlayer() {
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
               shuffle
-                ? "text-accent"
+                ? "text-accent-strong"
                 : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Toggle shuffle"
@@ -305,7 +307,8 @@ export function FullPlayer() {
           <button
             onClick={prev}
             disabled={!currentFile}
-            className="rounded-full p-2 text-zinc-600 transition active:scale-90 disabled:active:scale-100 hover:bg-zinc-100 disabled:opacity-30 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            aria-label="Previous"
+            className="grid h-11 w-11 place-items-center rounded-full text-zinc-700 transition hover:bg-zinc-950/5 active:scale-90 disabled:opacity-30 disabled:active:scale-100 dark:text-zinc-200 dark:hover:bg-white/10"
           >
             <SkipBack className="h-5 w-5" />
           </button>
@@ -316,7 +319,7 @@ export function FullPlayer() {
             <button
               onClick={togglePlay}
               disabled={!currentFile || isLoading}
-              className="relative z-10 rounded-full bg-zinc-900 p-5 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+              className="relative z-10 grid h-16 w-16 place-items-center rounded-full bg-zinc-950 text-white shadow-lg transition hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-30 disabled:hover:scale-100 dark:bg-white dark:text-zinc-950"
               aria-label={isPlaying ? "Pause" : "Play"}
             >
               <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />
@@ -325,7 +328,8 @@ export function FullPlayer() {
           <button
             onClick={next}
             disabled={!currentFile}
-            className="rounded-full p-2 text-zinc-600 transition active:scale-90 disabled:active:scale-100 hover:bg-zinc-100 disabled:opacity-30 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            aria-label="Next"
+            className="grid h-11 w-11 place-items-center rounded-full text-zinc-700 transition hover:bg-zinc-950/5 active:scale-90 disabled:opacity-30 disabled:active:scale-100 dark:text-zinc-200 dark:hover:bg-white/10"
           >
             <SkipForward className="h-5 w-5" />
           </button>
@@ -334,7 +338,7 @@ export function FullPlayer() {
             className={clsx(
               "rounded-full p-2 transition active:scale-90",
               loopMode !== "off"
-                ? "text-accent"
+                ? "text-accent-strong"
                 : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
             )}
             aria-label="Cycle repeat mode"
@@ -356,7 +360,7 @@ export function FullPlayer() {
               className={clsx(
                 "rounded-full p-2 transition active:scale-90",
                 synced
-                  ? "text-accent"
+                  ? "text-accent-strong"
                   : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
               )}
               aria-label={synced ? "Stop listening together" : "Listen together"}

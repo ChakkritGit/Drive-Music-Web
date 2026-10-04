@@ -77,7 +77,7 @@ export default function PrivacyPolicyPage() {
                 href={GOOGLE_USER_DATA_POLICY_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent hover:underline"
+                className="text-accent-strong hover:underline"
               >
                 Google API Services User Data Policy
               </a>
@@ -152,7 +152,7 @@ export default function PrivacyPolicyPage() {
                 href={GOOGLE_PERMISSIONS_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent hover:underline"
+                className="text-accent-strong hover:underline"
               >
                 your Google Account permissions
               </a>
@@ -200,7 +200,7 @@ export default function PrivacyPolicyPage() {
                 href={REPO_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent hover:underline"
+                className="text-accent-strong hover:underline"
               >
                 github.com/ChakkritGit/drive-music
               </a>
@@ -209,7 +209,7 @@ export default function PrivacyPolicyPage() {
                 href={SUPPORT_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent hover:underline"
+                className="text-accent-strong hover:underline"
               >
                 GitHub Issues
               </a>

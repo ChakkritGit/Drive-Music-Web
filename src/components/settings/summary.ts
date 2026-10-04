@@ -17,12 +17,10 @@ export type SummaryPlayer = Pick<
 
 const onOff = (v: boolean) => (v ? "on" : "off");
 
-// themeLabel is passed in: the theme lives in ThemeContext, not the player.
-export function sectionSummary(id: string, p: SummaryPlayer, themeLabel?: string): string {
+export function sectionSummary(id: string, p: SummaryPlayer): string {
   switch (id) {
     case "appearance":
-      if (themeLabel) return `${themeLabel} · Visualizer ${onOff(p.visualizerEnabled)}`;
-      break;
+      return `Visualizer ${onOff(p.visualizerEnabled)}`;
     case "playback":
       return `${p.crossfadeEnabled ? `Crossfade ${p.crossfadeSeconds}s` : "Crossfade off"} · Gapless ${onOff(p.gaplessEnabled)}`;
     case "mixing":

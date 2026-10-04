@@ -15,13 +15,8 @@ const base: SummaryPlayer = {
 
 describe("sectionSummary", () => {
   it("appearance", () => {
-    expect(sectionSummary("appearance", base, "Dark")).toBe("Dark · Visualizer on");
-    expect(sectionSummary("appearance", { ...base, visualizerEnabled: false }, "System")).toBe(
-      "System · Visualizer off",
-    );
-  });
-  it("appearance falls back without a theme label", () => {
-    expect(sectionSummary("appearance", base)).toBe("Theme and visualizer");
+    expect(sectionSummary("appearance", base)).toBe("Visualizer on");
+    expect(sectionSummary("appearance", { ...base, visualizerEnabled: false })).toBe("Visualizer off");
   });
   it("playback", () => {
     expect(sectionSummary("playback", base)).toBe("Crossfade 4s · Gapless on");

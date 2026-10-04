@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { ChevronRight, Folder, Loader2 } from "lucide-react";
+import { Folder, Loader2 } from "lucide-react";
 import { isFolder, listFolder } from "@/lib/drive";
 import type { DriveFile } from "@/types";
 import { TrackRow } from "@/components/TrackRow";
 import { DownloadAllButton } from "@/components/DownloadAllButton";
 import { usePlayer } from "@/components/PlayerContext";
+import { EmptyState, PAGE, PageHeader } from "@/components/ui";
 
 interface Crumb {
   id: string;
@@ -53,45 +54,49 @@ export function DriveBrowser() {
   const audioIndex = new Map(audioFiles.map((f, i) => [f.id, i]));
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <nav className="mb-4 flex flex-wrap items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
-        {stack.map((crumb, i) => (
-          <span key={crumb.id} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight className="h-3.5 w-3.5" />}
-            <button
-              onClick={() => setStack(stack.slice(0, i + 1))}
-              className={i === stack.length - 1 ? "font-medium text-zinc-900 dark:text-zinc-50" : "hover:underline"}
-            >
-              {crumb.name}
-            </button>
-          </span>
-        ))}
-      </nav>
+    <div className={PAGE}>
+      <PageHeader eyebrow="Google Drive" title={current.name} />
+      {stack.length > 1 && (
+        <nav aria-label="Folder path" className="-mt-3 mb-6 flex flex-wrap items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400">
+          {stack.map((crumb, i) => (
+            <span key={crumb.id} className="flex items-center gap-1">
+              {i > 0 && <span className="text-zinc-300 dark:text-zinc-700">/</span>}
+              <button
+                onClick={() => setStack(stack.slice(0, i + 1))}
+                aria-current={i === stack.length - 1 ? "page" : undefined}
+                className={i === stack.length - 1 ? "font-medium text-zinc-950 dark:text-zinc-50" : "hover:text-zinc-950 hover:underline dark:hover:text-zinc-50"}
+              >
+                {crumb.name}
+              </button>
+            </span>
+          ))}
+        </nav>
+      )}
 
       {loading && (
-        <div className="flex items-center gap-2 py-10 text-sm text-zinc-400">
+        <div className="flex items-center gap-2 py-10 text-sm text-zinc-500">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
         </div>
       )}
 
-      {error && <p className="py-10 text-sm text-red-500">{error}</p>}
+      {error && <p className="py-10 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-      {!loading && !error && items.length === 0 && (
-        <p className="py-10 text-sm text-zinc-400">This folder is empty.</p>
-      )}
+      {!loading && !error && items.length === 0 && <EmptyState icon={<Folder className="h-6 w-6" />}>This folder is empty.</EmptyState>}
 
       {!loading && !error && audioFiles.length > 0 && <DownloadAllButton files={audioFiles} />}
 
-      <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+      <ul className="flex flex-col">
         {items.map((file, position) =>
           isFolder(file) ? (
             <li key={file.id}>
               <button
                 onClick={() => setStack([...stack, { id: file.id, name: file.name }])}
-                className="flex w-full items-center gap-3 py-3 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+                className="-mx-2 flex min-h-14 w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2 text-left transition hover:bg-zinc-100 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none dark:hover:bg-zinc-900"
               >
-                <Folder className="h-5 w-5 shrink-0 text-zinc-400" />
-                <span className="truncate text-sm text-zinc-800 dark:text-zinc-200">{file.name}</span>
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                  <Folder className="h-5 w-5" />
+                </span>
+                <span className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{file.name}</span>
               </button>
             </li>
           ) : (

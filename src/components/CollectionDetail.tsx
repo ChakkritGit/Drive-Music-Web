@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowLeft, Play, Search, Shuffle } from "lucide-react";
+import { ChevronLeft, Play, Shuffle } from "lucide-react";
+import { BACK, CoverArt, EmptyState, PAGE, PILL_OUTLINE, PILL_PRIMARY, PageHeader, SearchField } from "@/components/ui";
 import type { DriveFile, PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { TrackRow } from "@/components/TrackRow";
@@ -50,63 +51,50 @@ export function CollectionDetail({ title, subtitle, tracks, source, onBack }: Co
     play(tracks, weightedRandomIndex(weights), source);
   }
 
+  const covers = tracks
+    .map((f) => cachedTracks.get(f.id)?.parsedMeta.pictureDataUrl)
+    .filter((c): c is string => !!c)
+    .slice(0, 4);
+
   return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <button
-        onClick={onBack}
-        className="mb-4 flex items-center gap-1.5 text-sm text-zinc-500 hover:underline dark:text-zinc-400"
-      >
-        <ArrowLeft className="h-4 w-4" /> Back
+    <div className={PAGE}>
+      <button onClick={onBack} className={BACK}>
+        <ChevronLeft className="h-4 w-4" /> Back
       </button>
 
-      <h2 className="mb-1 text-lg font-medium text-zinc-900 dark:text-zinc-50">{title}</h2>
-      <p className="mb-4 text-xs text-zinc-400">
-        {subtitle ? `${subtitle} · ` : ""}
-        {tracks.length} track{tracks.length === 1 ? "" : "s"}
-      </p>
+      <PageHeader
+        eyebrow={subtitle}
+        title={title}
+        meta={`${tracks.length} track${tracks.length === 1 ? "" : "s"}`}
+        cover={<CoverArt covers={covers} />}
+        actions={
+          tracks.length > 0 && (
+            <>
+              <button onClick={handlePlayInOrder} className={PILL_PRIMARY}>
+                <Play className="h-4 w-4 fill-current" /> Play
+              </button>
+              <button onClick={handleShufflePlay} className={PILL_OUTLINE}>
+                <Shuffle className="h-4 w-4" /> Shuffle
+              </button>
+              <SequenceMixButton files={tracks} source={source} />
+            </>
+          )
+        }
+      />
 
       {tracks.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <button
-            onClick={handlePlayInOrder}
-            className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-sm text-white transition hover:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            <Play className="h-3.5 w-3.5" /> Play
-          </button>
-          <button
-            onClick={handleShufflePlay}
-            className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-4 py-2 text-sm text-zinc-600 transition hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
-            <Shuffle className="h-3.5 w-3.5" /> Shuffle
-          </button>
-        </div>
-      )}
-
-      {tracks.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <SearchField value={query} onChange={setQuery} placeholder="Search this collection" className="sm:w-80" />
           <DownloadAllButton files={tracks} />
-          <SequenceMixButton files={tracks} source={source} className="mb-4" />
-        </div>
-      )}
-
-      {tracks.length > 0 && (
-        <div className="relative mt-4 mb-4">
-          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search this collection…"
-            className="w-full rounded-full border border-zinc-200 bg-transparent py-2 pr-4 pl-9 text-sm text-zinc-700 outline-none focus:border-zinc-400 dark:border-zinc-800 dark:text-zinc-300"
-          />
         </div>
       )}
 
       {tracks.length === 0 ? (
-        <p className="py-10 text-sm text-zinc-400">Nothing here yet.</p>
+        <EmptyState>Nothing here yet.</EmptyState>
       ) : visibleTracks.length === 0 ? (
-        <p className="py-10 text-sm text-zinc-400">No tracks match &quot;{query}&quot;.</p>
+        <EmptyState>No tracks match &quot;{query}&quot;.</EmptyState>
       ) : (
-        <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+        <ul className="flex flex-col">
           {visibleTracks.map(({ file, index }, position) => (
             <TrackRow
               key={`${file.id}-${index}`}

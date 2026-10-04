@@ -1,6 +1,5 @@
 "use client";
 
-import { ThemePicker } from "@/components/ThemePicker";
 import { usePlayer } from "@/components/PlayerContext";
 
 export function AppearanceSettings() {
@@ -9,14 +8,6 @@ export function AppearanceSettings() {
   return (
     <>
       <section className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
-        <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">Theme</h2>
-        <p className="mt-1 text-xs text-zinc-400">
-          Repaints the whole app. Your choice is remembered on this device.
-        </p>
-        <ThemePicker />
-      </section>
-
-      <section className="mt-6 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">

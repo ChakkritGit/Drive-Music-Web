@@ -411,7 +411,7 @@ function Segmented({
           className={clsx(
             "rounded-full px-3 py-1.5 text-xs transition disabled:opacity-40",
             value === option.value
-              ? "bg-accent text-white"
+              ? "bg-accent text-zinc-950"
               : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700",
           )}
         >

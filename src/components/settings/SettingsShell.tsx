@@ -1,12 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
-import { SignInScreen } from "@/components/SignInScreen";
+import { ChevronLeft } from "lucide-react";
 
-// Shared page chrome plus the sign-in gate, so the list and every sub-page behave the same.
+// Page chrome for the settings list and every sub-page. The (app) layout around it owns the
+// sign-in gate and the scrolling, as it does for every other page.
 export function SettingsShell({
   title,
   backHref,
@@ -18,37 +17,16 @@ export function SettingsShell({
   backLabel: string;
   children: ReactNode;
 }) {
-  const { data: session, status } = useSession();
-
-  if (status === "loading") {
-    return (
-      <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
-        Loading…
-      </div>
-    );
-  }
-
-  if (!session) {
-    return <SignInScreen />;
-  }
-
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-6 py-6 pb-[calc(7rem+env(safe-area-inset-bottom))]">
-        <div className="mb-6 grid grid-cols-[auto_1fr_auto] items-center gap-2">
-          <Link
-            href={backHref}
-            className="flex shrink-0 items-center gap-1.5 text-sm text-zinc-500 hover:underline dark:text-zinc-400"
-          >
-            <ArrowLeft className="h-4 w-4" /> {backLabel}
-          </Link>
-          <h1 className="truncate text-center text-base font-medium text-zinc-900 sm:text-lg dark:text-zinc-50">
-            {title}
-          </h1>
-          <div className="w-[4.5rem]" />
-        </div>
-        {children}
-      </div>
+    <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 lg:py-10">
+      <Link
+        href={backHref}
+        className="-ml-1 inline-flex h-8 items-center gap-1 rounded-lg pr-2 text-sm text-zinc-500 transition hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
+      >
+        <ChevronLeft className="h-4 w-4" /> {backLabel}
+      </Link>
+      <h1 className="mt-2 mb-6 text-2xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">{title}</h1>
+      {children}
     </div>
   );
 }

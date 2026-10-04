@@ -6,7 +6,6 @@ import { SettingsShell } from "@/components/settings/SettingsShell";
 import { SETTINGS_SECTIONS } from "@/components/settings/sections";
 import { sectionSummary } from "@/components/settings/summary";
 import { usePlayer } from "@/components/PlayerContext";
-import { useTheme } from "@/components/ThemeContext";
 
 export default function SettingsPage() {
   return (
@@ -19,8 +18,6 @@ export default function SettingsPage() {
 // Inside the shell so usePlayer only runs once signed in, same as the old SettingsView.
 function SettingsList() {
   const player = usePlayer();
-  const { preference, theme } = useTheme();
-  const themeLabel = preference === "system" ? "System" : theme.label;
 
   return (
     <div className="divide-y divide-zinc-200 overflow-hidden rounded-2xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
@@ -36,7 +33,7 @@ function SettingsList() {
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</span>
             <span className="block truncate text-xs text-zinc-400">
-              {sectionSummary(id, player, themeLabel)}
+              {sectionSummary(id, player)}
             </span>
           </span>
           <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />

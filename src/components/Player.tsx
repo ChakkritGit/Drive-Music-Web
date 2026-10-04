@@ -4,8 +4,8 @@ import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
-  ChevronUp,
   ListMusic,
+  MonitorSpeaker,
   Music,
   Repeat,
   Repeat1,
@@ -30,7 +30,7 @@ function formatTime(sec: number): string {
 
 // Routes inside the (app) route group (see app/(app)/layout.tsx's NAV_ITEMS) — the only ones
 // that render the mobile bottom tab nav.
-const APP_GROUP_ROUTES = ["/", "/browse", "/playlists", "/library"];
+const APP_GROUP_ROUTES = ["/", "/browse", "/playlists", "/library", "/settings"];
 
 // Legal pages are standalone documents (also linked from the signed-out screen) — the playback
 // bar has nothing to do with reading them, so it stays out of the way entirely there.
@@ -61,7 +61,7 @@ export function Player() {
     cycleLoopMode,
     expand,
   } = usePlayer();
-  const { remoteNowPlaying, synced, toggleSynced } = useSync();
+  const { remoteNowPlaying, synced, toggleSynced, syncAvailable } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
   // Only surface what's playing on another device while this one isn't actively playing —
@@ -101,9 +101,10 @@ export function Player() {
   return (
     <div
       className={clsx(
-        "fixed inset-x-0 z-20 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-black/95",
+        "fixed inset-x-0 z-20 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95",
+        // Inside the app shell: above the phone's bottom nav, and beside the desktop sidebar.
         hasBottomNav
-          ? "bottom-[calc(4rem+env(safe-area-inset-bottom))] sm:bottom-0"
+          ? "bottom-[calc(4rem+env(safe-area-inset-bottom))] lg:bottom-0 lg:left-60"
           : "bottom-0",
       )}
     >
@@ -146,142 +147,140 @@ export function Player() {
         </div>
       )}
 
-      <div
-        className={clsx(
-          "mx-auto flex max-w-2xl items-center gap-2 px-6 text-xs text-zinc-400",
-          // On mobile with the bottom tab nav present, this bar already sits above it (which
-          // clears the gesture area itself) — no need to double up on safe-area padding here.
-          hasBottomNav
-            ? "pt-3"
-            : "pt-[max(0.75rem,env(safe-area-inset-bottom))]",
-        )}
-      >
-        <span className="tabular-nums">{formatTime(progress)}</span>
-        <input
-          type="range"
-          min={0}
-          max={duration || 0}
-          step={0.1}
-          value={Math.min(progress, duration || 0)}
-          onChange={(e) => seek(Number(e.target.value))}
-          className="flex-1 accent-accent"
-        />
-        <span className="tabular-nums">{formatTime(duration)}</span>
+      {/* Phones: the progress is a hairline along the top edge; the full slider lives in Now Playing. */}
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-zinc-200 lg:hidden dark:bg-zinc-800" aria-hidden="true">
+        <div className="h-full bg-accent" style={{ width: `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` }} />
       </div>
 
-      <div className="mx-auto flex max-w-2xl items-center gap-3 px-6 py-3 pb-8 md:pb-4">
+      <div
+        className={clsx(
+          "grid items-center gap-3 px-4 lg:h-24 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] lg:gap-6 lg:px-8",
+          "grid-cols-[minmax(0,1fr)_auto]",
+          // With the phone's bottom nav below, this bar already clears the gesture area.
+          hasBottomNav ? "py-3.5 lg:py-0" : "pt-3.5 pb-[max(0.875rem,env(safe-area-inset-bottom))] lg:py-0",
+        )}
+      >
+        {/* Left: what is playing. Opens Now Playing. */}
         <button
           onClick={expand}
           disabled={!currentFile}
-          className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-100 disabled:cursor-default dark:bg-zinc-800"
+          className="flex min-w-0 items-center gap-3 rounded-lg text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:cursor-default"
           aria-label="Expand player"
         >
-          {currentMeta?.pictureDataUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={currentMeta.pictureDataUrl}
-              alt=""
-              className="h-full w-full object-cover"
+          {/* Round, like a record on the deck. */}
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 ring-1 ring-zinc-950/5 lg:h-14 lg:w-14 dark:bg-zinc-800 dark:ring-white/10">
+            {currentMeta?.pictureDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={currentMeta.pictureDataUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <Music className="h-5 w-5 text-zinc-400" />
+            )}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-zinc-950 lg:text-base dark:text-zinc-50">
+              {remoteTrack && remoteFile
+                ? remoteFile.name.replace(/\.[^./]+$/, "")
+                : currentFile
+                  ? currentMeta?.title || currentFile.name
+                  : "No track playing"}
+            </span>
+            <span className="block truncate text-xs text-zinc-500 lg:mt-0.5 lg:text-sm dark:text-zinc-400">
+              {error ? (
+                <span className="text-red-500">{error}</span>
+              ) : remoteTrack ? (
+                `Playing on ${remoteTrack.deviceName}`
+              ) : synced && remoteNowPlaying ? (
+                `Synced with ${remoteNowPlaying.deviceName}`
+              ) : (
+                currentMeta?.artist || " "
+              )}
+            </span>
+          </span>
+        </button>
+
+        {/* Centre: the transport, and on a desktop the timeline under it. */}
+        <div className="flex flex-col items-center gap-2">
+          <div className="flex items-center gap-1 lg:gap-2">
+            {remoteTrack ? (
+              <button
+                onClick={toggleSynced}
+                className="flex h-10 cursor-pointer items-center gap-1.5 rounded-full bg-accent px-4 text-xs font-semibold text-zinc-950 transition hover:brightness-95"
+              >
+                <Users className="h-3.5 w-3.5" /> Listen together
+              </button>
+            ) : (
+              <>
+                <IconButton
+                  onClick={toggleShuffle}
+                  label="Toggle shuffle"
+                  active={shuffle}
+                  className="hidden lg:grid"
+                >
+                  <Shuffle className="h-4 w-4" />
+                </IconButton>
+                <IconButton onClick={prev} disabled={!currentFile} label="Previous" className="hidden sm:grid">
+                  <SkipBack className="h-[18px] w-[18px]" />
+                </IconButton>
+                <button
+                  onClick={togglePlay}
+                  disabled={!currentFile || isLoading}
+                  className="grid h-10 w-10 place-items-center rounded-full bg-zinc-950 text-white transition hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-30 disabled:hover:scale-100 dark:bg-white dark:text-zinc-950"
+                  aria-label={isPlaying ? "Pause" : "Play"}
+                >
+                  <PlayPauseIcon playing={isPlaying} className="h-4 w-4" />
+                </button>
+                <IconButton onClick={next} disabled={!currentFile} label="Next">
+                  <SkipForward className="h-[18px] w-[18px]" />
+                </IconButton>
+                <IconButton
+                  onClick={cycleLoopMode}
+                  label="Cycle repeat mode"
+                  active={loopMode !== "off"}
+                  className="hidden lg:grid"
+                >
+                  {loopMode === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                </IconButton>
+              </>
+            )}
+          </div>
+          <div className="hidden w-full max-w-xl items-center gap-2.5 text-xs text-zinc-500 tabular-nums lg:flex dark:text-zinc-400">
+            <span className="w-10 text-right">{formatTime(progress)}</span>
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={0.1}
+              value={Math.min(progress, duration || 0)}
+              onChange={(e) => seek(Number(e.target.value))}
+              className="seek flex-1"
+              style={{ "--pct": `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` } as React.CSSProperties}
+              aria-label="Seek"
             />
-          ) : (
-            <Music className="h-5 w-5 text-zinc-400" />
-          )}
-        </button>
-
-        <button
-          onClick={expand}
-          disabled={!currentFile}
-          className="min-w-0 flex-1 text-left disabled:cursor-default"
-        >
-          <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            {remoteTrack && remoteFile
-              ? remoteFile.name.replace(/\.[^./]+$/, "")
-              : currentFile
-                ? currentMeta?.title || currentFile.name
-                : "No track playing"}
-          </p>
-          <p className="truncate text-xs text-zinc-400">
-            {error ? (
-              <span className="text-red-500">{error}</span>
-            ) : remoteTrack ? (
-              `Playing on ${remoteTrack.deviceName}`
-            ) : synced && remoteNowPlaying ? (
-              `Synced with ${remoteNowPlaying.deviceName}`
-            ) : (
-              currentMeta?.artist || " "
-            )}
-          </p>
-        </button>
-
-        <div className="hidden items-center gap-0.5 sm:flex">
-          <button
-            onClick={toggleShuffle}
-            className={clsx(
-              "rounded-full p-1.5 transition",
-              shuffle
-                ? "text-accent"
-                : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-            )}
-            aria-label="Toggle shuffle"
-          >
-            <Shuffle className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={cycleLoopMode}
-            className={clsx(
-              "rounded-full p-1.5 transition",
-              loopMode !== "off"
-                ? "text-accent"
-                : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-            )}
-            aria-label="Cycle repeat mode"
-          >
-            {loopMode === "one" ? (
-              <Repeat1 className="h-3.5 w-3.5" />
-            ) : (
-              <Repeat className="h-3.5 w-3.5" />
-            )}
-          </button>
+            <span className="w-10">{formatTime(duration)}</span>
+          </div>
         </div>
 
-        <div className="flex items-center gap-1">
-          {remoteTrack ? (
-            <button
+        {/* Right: listening on other devices, the queue, then volume at the far edge. Desktop only;
+            on a phone these live in Now Playing. */}
+        <div className="hidden items-center justify-end gap-1 lg:flex">
+          {syncAvailable && (
+            <IconButton
               onClick={toggleSynced}
-              className="flex cursor-pointer items-center gap-1.5 rounded-full bg-zinc-900 px-3 py-2 text-xs font-medium text-white transition hover:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
+              label={synced ? "Stop listening together" : "Listen together"}
+              active={synced}
             >
-              <Users className="h-3.5 w-3.5" /> Listen together
-            </button>
-          ) : (
-            <>
-              <button
-                onClick={prev}
-                disabled={!currentFile}
-                className="rounded-full p-2 text-zinc-500 transition active:scale-90 disabled:active:scale-100 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
-              >
-                <SkipBack className="h-4 w-4" />
-              </button>
-              <button
-                onClick={togglePlay}
-                disabled={!currentFile || isLoading}
-                className="rounded-full bg-zinc-900 p-2.5 text-white transition active:scale-90 disabled:active:scale-100 hover:opacity-90 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
-                aria-label={isPlaying ? "Pause" : "Play"}
-              >
-                <PlayPauseIcon playing={isPlaying} className="h-4 w-4" />
-              </button>
-              <button
-                onClick={next}
-                disabled={!currentFile}
-                className="rounded-full p-2 text-zinc-500 transition active:scale-90 disabled:active:scale-100 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
-              >
-                <SkipForward className="h-4 w-4" />
-              </button>
-            </>
+              <MonitorSpeaker className="h-[18px] w-[18px]" />
+            </IconButton>
           )}
-        </div>
-
-        <div className="hidden items-center gap-2 sm:flex">
-          <Volume2 className="h-4 w-4 text-zinc-400" />
+          <IconButton
+            onClick={() => setShowUpNext((v) => !v)}
+            disabled={upNext.length === 0}
+            label="Toggle up next"
+            active={showUpNext}
+          >
+            <ListMusic className="h-[18px] w-[18px]" />
+          </IconButton>
+          <Volume2 className="mr-1 ml-2 h-[18px] w-[18px] shrink-0 text-zinc-500 dark:text-zinc-400" aria-hidden="true" />
           <input
             type="range"
             min={0}
@@ -289,33 +288,47 @@ export function Player() {
             step={0.01}
             value={volume}
             onChange={(e) => changeVolume(Number(e.target.value))}
-            className="w-20 accent-accent"
+            className="seek w-28"
+            style={{ "--pct": `${volume * 100}%` } as React.CSSProperties}
+            aria-label="Volume"
           />
         </div>
-
-        <button
-          onClick={() => setShowUpNext((v) => !v)}
-          disabled={upNext.length === 0}
-          className={clsx(
-            "cursor-pointer rounded-full p-2 transition disabled:cursor-default disabled:opacity-30",
-            showUpNext
-              ? "text-accent"
-              : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-          )}
-          aria-label="Toggle up next"
-        >
-          <ListMusic className="h-4 w-4" />
-        </button>
-
-        <button
-          onClick={expand}
-          disabled={!currentFile}
-          className="rounded-full p-2 text-zinc-400 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900"
-          aria-label="Expand player"
-        >
-          <ChevronUp className="h-4 w-4" />
-        </button>
       </div>
     </div>
+  );
+}
+
+/** A 36px round ghost button; `active` tints it with the accent (shuffle on, repeat on, queue open). */
+function IconButton({
+  onClick,
+  label,
+  active = false,
+  disabled = false,
+  className,
+  children,
+}: {
+  onClick: () => void;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      aria-pressed={active || undefined}
+      className={clsx(
+        "grid h-9 w-9 place-items-center rounded-full transition focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-30",
+        active
+          ? "text-accent-strong"
+          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-50",
+        className,
+      )}
+    >
+      {children}
+    </button>
   );
 }

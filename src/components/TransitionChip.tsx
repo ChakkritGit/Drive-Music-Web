@@ -39,7 +39,7 @@ export function TransitionChip({ from, to }: { from: DriveFile; to: DriveFile })
         className="flex items-center gap-1.5 rounded-full bg-zinc-100 px-2.5 py-1 text-xs text-zinc-600 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
       >
         {isAuto ? (
-          <Sparkles className="h-3 w-3 text-accent" />
+          <Sparkles className="h-3 w-3 text-accent-strong" />
         ) : (
           <SlidersHorizontal className="h-3 w-3" />
         )}
@@ -51,7 +51,7 @@ export function TransitionChip({ from, to }: { from: DriveFile; to: DriveFile })
           {analysis.bpm !== undefined && (
             <span className="tabular-nums">{Math.round(analysis.bpm)} BPM</span>
           )}
-          {analysis.camelotKey && <span className="text-accent">{analysis.camelotKey}</span>}
+          {analysis.camelotKey && <span className="text-accent-strong">{analysis.camelotKey}</span>}
         </span>
       )}
       {isEditing && (

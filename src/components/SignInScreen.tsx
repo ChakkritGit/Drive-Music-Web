@@ -7,9 +7,9 @@ import { AppLogo } from "@/components/AppLogo";
 export function SignInScreen() {
   return (
     <div className="flex flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-sm rounded-2xl border border-zinc-200 p-8 text-center shadow-sm dark:border-zinc-800">
+      <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <AppLogo size={56} className="mx-auto mb-6" />
-        <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
+        <h1 className="text-xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">Drive Music</h1>
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
           Drive Music is a personal audio player for the music files already sitting in your
           Google Drive — browse your folders, play tracks, download them for offline listening,
@@ -21,11 +21,11 @@ export function SignInScreen() {
         </p>
         <button
           onClick={() => signIn("google")}
-          className="mt-6 w-full rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
+          className="mt-6 h-11 w-full rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:outline-none"
         >
           Sign in with Google
         </button>
-        <p className="mt-4 text-[11px] text-zinc-400">
+        <p className="mt-4 text-[11px] text-zinc-500">
           By continuing, you agree to the{" "}
           <Link href="/terms" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
             Terms of Service

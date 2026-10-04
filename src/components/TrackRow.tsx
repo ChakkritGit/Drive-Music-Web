@@ -54,11 +54,12 @@ export function TrackRow({
   };
 
   return (
-    <li className="py-3">
-      <div className="flex items-center gap-3">
+    <li>
+      <div className="-mx-2 flex min-h-14 items-center gap-3 rounded-lg px-2 py-1.5 transition hover:bg-zinc-100 dark:hover:bg-zinc-900">
         <button
           onClick={handleSelect}
-          className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-100 text-zinc-400 transition hover:opacity-80 dark:bg-zinc-800"
+          aria-label={isCurrent && isPlaying ? `Pause ${title}` : `Play ${title}`}
+          className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-zinc-100 text-zinc-400 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none dark:bg-zinc-800"
         >
           {meta?.pictureDataUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -75,20 +76,24 @@ export function TrackRow({
         <button onClick={handleSelect} className="min-w-0 flex-1 text-left">
           <p
             className={clsx(
-              "truncate text-sm",
+              "truncate text-sm font-medium",
               // The playing track is the one "active" thing in a list — same accent as every
               // other active state in the app.
-              isCurrent ? "font-medium text-accent" : "text-zinc-700 dark:text-zinc-300",
+              isCurrent ? "text-accent-strong" : "text-zinc-900 dark:text-zinc-100",
             )}
           >
             {title}
           </p>
-          {subtitle && <p className="truncate text-xs text-zinc-400">{subtitle}</p>}
+          {subtitle && <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>}
         </button>
 
         <div className="flex shrink-0 items-center gap-2 text-zinc-400">
-          {meta?.durationSec ? <span className="text-xs tabular-nums">{formatDuration(meta.durationSec)}</span> : null}
-          {cachedTrack && <CloudCheck className="h-4 w-4 text-accent" />}
+          {meta?.durationSec ? (
+            <span className="hidden w-10 text-right text-xs text-zinc-500 tabular-nums sm:inline dark:text-zinc-400">
+              {formatDuration(meta.durationSec)}
+            </span>
+          ) : null}
+          {cachedTrack && <CloudCheck className="h-4 w-4 text-accent-strong" />}
           {/* Favorited is worth showing at a glance, but as a plain indicator — toggling it (and
               every other per-track action) now lives in the menu, so the row keeps a single
               tappable surface: play. */}

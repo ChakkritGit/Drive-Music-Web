@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { Library, Search, Shuffle } from "lucide-react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Library, Shuffle } from "lucide-react";
+import Link from "next/link";
+import { EmptyState, PAGE, PILL_PRIMARY, PageHeader, SearchField } from "@/components/ui";
 import type { PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { TrackRow } from "@/components/TrackRow";
@@ -17,7 +19,12 @@ export function LibraryView() {
   // The queue passed to each row stays the full, unfiltered list — searching only changes
   // what's displayed, not what plays next/prev, so up-next isn't scoped to the search text.
   const queue = tracks.map((t) => t.driveMeta);
-  const [query, setQuery] = useState("");
+  // The search is the URL's `q`, shared with the desktop top bar's search box.
+  const pathname = usePathname();
+  const query = useSearchParams().get("q") ?? "";
+  // replaceState is synced into useSearchParams immediately, so typing never lags (see TopBar).
+  const setQuery = (next: string) =>
+    window.history.replaceState(null, "", next ? `${pathname}?q=${encodeURIComponent(next)}` : pathname);
   const normalizedQuery = query.trim().toLowerCase();
   const visibleTracks = tracks
     .map((t, index) => ({ t, index }))
@@ -39,45 +46,43 @@ export function LibraryView() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          <Library className="h-4 w-4" /> Downloaded — available offline
-        </h2>
+    <div className={PAGE}>
+      <PageHeader
+        eyebrow="Offline"
+        title="Library"
+        meta={`${tracks.length} downloaded track${tracks.length === 1 ? "" : "s"} · plays without a connection`}
+        actions={
+          tracks.length > 0 && (
+            <>
+              <button onClick={handleShufflePlay} className={PILL_PRIMARY}>
+                <Shuffle className="h-4 w-4" /> Shuffle play
+              </button>
+              <SequenceMixButton files={queue} source={LIBRARY_SOURCE} />
+            </>
+          )
+        }
+      />
 
-        {tracks.length > 0 && (
-          <div className="flex shrink-0 items-center gap-2">
-            <SequenceMixButton files={queue} source={LIBRARY_SOURCE} />
-            <button
-              onClick={handleShufflePlay}
-              className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-xs text-zinc-600 transition hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              <Shuffle className="h-3.5 w-3.5" /> Shuffle play
-            </button>
-          </div>
-        )}
-      </div>
-
+      {/* On a desktop the top bar's search box is this search; phones get their own here. */}
       {tracks.length > 0 && (
-        <div className="relative mb-4">
-          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search downloaded tracks…"
-            className="w-full rounded-full border border-zinc-200 bg-transparent py-2 pr-4 pl-9 text-sm text-zinc-700 outline-none focus:border-zinc-400 dark:border-zinc-800 dark:text-zinc-300"
-          />
-        </div>
+        <SearchField value={query} onChange={setQuery} placeholder="Search downloaded tracks" className="mb-4 lg:hidden" />
       )}
 
       {tracks.length === 0 ? (
-        <p className="py-10 text-sm text-zinc-400">
-          Nothing downloaded yet. Play a track from Browse and it will show up here for offline listening.
-        </p>
+        <EmptyState
+          icon={<Library className="h-6 w-6" />}
+          action={
+            <Link href="/browse" className={PILL_PRIMARY}>
+              Browse your Drive
+            </Link>
+          }
+        >
+          Nothing downloaded yet. Play a track from Browse and it shows up here for offline listening.
+        </EmptyState>
       ) : visibleTracks.length === 0 ? (
-        <p className="py-10 text-sm text-zinc-400">No downloaded tracks match &quot;{query}&quot;.</p>
+        <EmptyState>No downloaded tracks match &quot;{query}&quot;.</EmptyState>
       ) : (
-        <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+        <ul className="flex flex-col">
           {visibleTracks.map(({ t, index }, position) => (
             <TrackRow
               key={t.fileId}

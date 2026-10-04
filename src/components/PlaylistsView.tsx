@@ -1,12 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { ListMusic, Plus, Trash2 } from "lucide-react";
-import { usePlaylists } from "@/components/PlaylistsContext";
+import { Heart, ListMusic, Plus, Trash2 } from "lucide-react";
+import { usePlayer } from "@/components/PlayerContext";
+import { FAVORITES_PLAYLIST_NAME, usePlaylists } from "@/components/PlaylistsContext";
+import { MediaCard } from "@/components/MediaCard";
+import { EmptyState, PAGE, PILL_PRIMARY, PageHeader } from "@/components/ui";
 import type { Playlist } from "@/types";
 
 export function PlaylistsView({ onOpen }: { onOpen: (playlist: Playlist) => void }) {
   const { playlists, createPlaylist, deletePlaylist } = usePlaylists();
+  const { cachedTracks, play } = usePlayer();
   const [newName, setNewName] = useState("");
 
   const handleCreate = async () => {
@@ -16,52 +20,64 @@ export function PlaylistsView({ onOpen }: { onOpen: (playlist: Playlist) => void
     await createPlaylist(name);
   };
 
-  return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="mb-4 flex items-center gap-2 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-        <ListMusic className="h-4 w-4" /> Playlists
-      </h2>
+  const coversFor = (p: Playlist) =>
+    p.tracks
+      .map((f) => cachedTracks.get(f.id)?.parsedMeta.pictureDataUrl)
+      .filter((c): c is string => !!c)
+      .slice(0, 4);
 
-      <div className="mb-6 flex items-center gap-2">
+  return (
+    <div className={PAGE}>
+      <PageHeader title="Playlists" meta={`${playlists.length} playlist${playlists.length === 1 ? "" : "s"}`} />
+
+      <form
+        className="mb-8 flex max-w-md items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleCreate();
+        }}
+      >
         <input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-          placeholder="New playlist name…"
-          className="min-w-0 flex-1 rounded-full border border-zinc-200 bg-transparent px-4 py-2 text-sm text-zinc-700 outline-none focus:border-zinc-400 dark:border-zinc-800 dark:text-zinc-300"
+          placeholder="New playlist name"
+          aria-label="New playlist name"
+          className="h-10 min-w-0 flex-1 rounded-full bg-zinc-100 px-4 text-sm text-zinc-950 outline-none placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-accent/50 dark:bg-zinc-900 dark:text-zinc-50"
         />
-        <button
-          onClick={handleCreate}
-          className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 text-sm text-white transition hover:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
-        >
+        <button type="submit" disabled={!newName.trim()} className={PILL_PRIMARY}>
           <Plus className="h-4 w-4" /> Create
         </button>
-      </div>
+      </form>
 
       {playlists.length === 0 ? (
-        <p className="py-10 text-sm text-zinc-400">
-          No playlists yet. Create one above, or add a track to a new playlist from Browse.
-        </p>
+        <EmptyState icon={<ListMusic className="h-6 w-6" />}>
+          No playlists yet. Name one above, or add a track to a new playlist from its menu.
+        </EmptyState>
       ) : (
-        <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-          {playlists.map((p) => (
-            <li key={p.id} className="flex items-center gap-3 py-3">
-              <button onClick={() => onOpen(p)} className="min-w-0 flex-1 text-left">
-                <p className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-200">{p.name}</p>
-                <p className="text-xs text-zinc-400">
-                  {p.tracks.length} track{p.tracks.length === 1 ? "" : "s"}
-                </p>
-              </button>
-              <button
-                onClick={() => deletePlaylist(p.id)}
-                className="rounded-full p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950"
-                aria-label="Delete playlist"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {playlists.map((p) => {
+            const favorites = p.name === FAVORITES_PLAYLIST_NAME;
+            return (
+              <div key={p.id} className="group/card relative">
+                <MediaCard
+                  title={p.name}
+                  subtitle={`${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}`}
+                  covers={coversFor(p)}
+                  icon={favorites ? <Heart className="h-8 w-8" /> : undefined}
+                  onOpen={() => onOpen(p)}
+                  onPlay={p.tracks.length > 0 ? () => play(p.tracks, 0, { type: "playlist", id: p.id, name: p.name }) : undefined}
+                />
+                <button
+                  onClick={() => deletePlaylist(p.id)}
+                  aria-label={`Delete playlist ${p.name}`}
+                  className="absolute top-2 right-2 grid h-8 w-8 place-items-center rounded-full bg-white/90 text-zinc-600 opacity-0 shadow transition group-focus-within/card:opacity-100 group-hover/card:opacity-100 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none dark:bg-zinc-900/90 dark:text-zinc-300 [@media(hover:none)]:opacity-100"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

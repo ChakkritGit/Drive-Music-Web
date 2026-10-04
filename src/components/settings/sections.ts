@@ -15,7 +15,7 @@ export const SETTINGS_SECTIONS: {
   icon: LucideIcon;
   Component: ComponentType;
 }[] = [
-  { id: "appearance", title: "Appearance", description: "Theme and visualizer", icon: Palette, Component: AppearanceSettings },
+  { id: "appearance", title: "Appearance", description: "Visualizer and display", icon: Palette, Component: AppearanceSettings },
   { id: "playback", title: "Playback", description: "Gapless, crossfade, loudness", icon: Play, Component: PlaybackSettings },
   { id: "mixing", title: "Mixing", description: "Auto mix and beatmatching", icon: Disc3, Component: MixingSettings },
   { id: "sound", title: "Sound", description: "Equalizer and spatial audio", icon: SlidersHorizontal, Component: SoundSettings },
