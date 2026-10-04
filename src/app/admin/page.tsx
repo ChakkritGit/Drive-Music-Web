@@ -16,6 +16,7 @@ import {
   listRecentSources,
 } from "@/lib/db";
 import { usePlayer } from "@/components/PlayerContext";
+import { readPauseLog, type PauseEntry } from "@/lib/pauseLog";
 import type {
   CachedTrack,
   ListeningModel,
@@ -915,6 +916,8 @@ function AdminDashboard() {
           <NetworkVisualizer model={model} latestEvent={latestEvent} />
         </section>
 
+        <PauseLogSection />
+
         <section className="rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
           <h2 className="mb-4 text-sm font-medium text-zinc-500 dark:text-zinc-400">
             Recent training events
@@ -979,5 +982,44 @@ function AdminDashboard() {
         </section>
       </div>
     </div>
+  );
+}
+
+const PAUSE_SOURCE_LABEL: Record<PauseEntry["source"], string> = {
+  app: "In the app",
+  "media-session": "Media controls",
+  browser: "Browser / system",
+};
+
+/** Every time playback stopped, and who stopped it - for tracking down "it just stopped". */
+function PauseLogSection() {
+  const [log, setLog] = useState<PauseEntry[]>([]);
+  // Read after mount: localStorage only exists in the browser.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- one read on mount
+  useEffect(() => setLog(readPauseLog()), []);
+
+  return (
+    <section className="mb-8 rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800">
+      <h2 className="mb-1 text-sm font-medium text-zinc-500 dark:text-zinc-400">Playback stops</h2>
+      <p className="mb-4 text-xs text-zinc-400">
+        The last 30 pauses. &quot;Browser / system&quot; means nothing in the app asked for it.
+      </p>
+      {log.length === 0 ? (
+        <p className="text-sm text-zinc-400">No pauses recorded yet.</p>
+      ) : (
+        <ul className="divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
+          {log.map((e) => (
+            <li key={e.at} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
+              <span className="text-zinc-900 dark:text-zinc-50">{PAUSE_SOURCE_LABEL[e.source]}</span>
+              <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                {new Date(e.at).toLocaleString()} · at {Math.floor(e.position / 60)}:
+                {String(Math.floor(e.position % 60)).padStart(2, "0")} · {e.hidden ? "tab hidden" : "tab visible"} ·
+                audio {e.audio}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

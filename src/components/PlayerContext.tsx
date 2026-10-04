@@ -22,6 +22,7 @@ import type {
   TrackAnalysis,
 } from "@/types";
 import { downloadFileFresh } from "@/lib/drive";
+import { recordPause, type PauseSource } from "@/lib/pauseLog";
 import { parseTrackMetadata } from "@/lib/metadata";
 import { extractFeatures } from "@/lib/features";
 import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
@@ -583,6 +584,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // quiet track above 1.0 — HTMLMediaElement.volume alone caps at 1.0, so it can only ever turn
   // loud tracks down (see src/lib/loudness.ts).
   const audioContextRef = useRef<AudioContext | null>(null);
+  /** Who asked for the next pause; read and cleared by handlePause. Unset means the browser. */
+  const pauseSourceRef = useRef<PauseSource | null>(null);
   const gainARef = useRef<GainNode | null>(null);
   const gainBRef = useRef<GainNode | null>(null);
   const chainARef = useRef<SlotChain | null>(null);
@@ -1628,6 +1631,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Pausing mid-crossfade would otherwise leave the inactive element silently playing (or
       // stuck at a partial volume) — simplest correct behavior is to cut the fade short.
       cancelCrossfade();
+      pauseSourceRef.current ??= "app";
       audio.pause();
     }
   }, [getActiveAudio, cancelCrossfade, getGainNode, currentFile, volume, trackGain]);
@@ -2490,8 +2494,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // visibilitychange effect above for the other half of that fix).
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
-    navigator.mediaSession.setActionHandler("play", () => togglePlay());
-    navigator.mediaSession.setActionHandler("pause", () => togglePlay());
+    // Each action does only what it says. Both used to toggle, so an OS "play" sent while
+    // already playing (headphones reconnecting, another app releasing audio) paused the music.
+    navigator.mediaSession.setActionHandler("play", () => {
+      if (getActiveAudio()?.paused) togglePlay();
+    });
+    navigator.mediaSession.setActionHandler("pause", () => {
+      const audio = getActiveAudio();
+      if (!audio || audio.paused) return;
+      pauseSourceRef.current = "media-session";
+      togglePlay();
+    });
     navigator.mediaSession.setActionHandler("previoustrack", () => prev());
     navigator.mediaSession.setActionHandler("nexttrack", () => next());
     navigator.mediaSession.setActionHandler("seekto", (details) => {
@@ -2504,7 +2517,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       navigator.mediaSession.setActionHandler("nexttrack", null);
       navigator.mediaSession.setActionHandler("seekto", null);
     };
-  }, [togglePlay, prev, next, seek]);
+  }, [togglePlay, prev, next, seek, getActiveAudio]);
 
   // Keeps the lock-screen/notification metadata (title/artist/artwork) in sync with the
   // current track.
@@ -2789,6 +2802,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Same for a preview: it pauses and swaps sources on both elements by design, and none of
       // that is the queue's playback state.
       if (isPreviewingRef.current) return;
+      // A track reaching its end pauses too; only stops before the end are worth a line.
+      if (!e.currentTarget.ended) recordPause({
+        at: Date.now(),
+        position: e.currentTarget.currentTime,
+        source: pauseSourceRef.current ?? "browser",
+        hidden: document.hidden,
+        audio: audioContextRef.current?.state ?? "none",
+      });
+      pauseSourceRef.current = null;
       setIsPlaying(false);
       persistSession(progressRef.current);
     },
