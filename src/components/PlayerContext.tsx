@@ -612,6 +612,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // isn't a useEffect-with-cleanup: React Strict Mode's dev-only double-invocation of effects
   // would otherwise close the context on the first "cleanup" with no way to rebuild it, since
   // the elements can never be re-attached to a fresh source node.
+  // Tells iOS (Safari 17+, home-screen apps included) this is a music player, so it treats the
+  // audio the way it treats a media app's: it carries on when the app is backgrounded or the
+  // screen locks, and the silent switch does not mute it. Set once, before anything plays.
+  // Browsers without the Audio Session API skip this.
+  useEffect(() => {
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = "playback";
+  }, []);
+
   const ensureAudioGraph = useCallback(() => {
     if (audioGraphInitializedRef.current) return;
     const audioA = audioARef.current;
