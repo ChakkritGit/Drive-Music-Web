@@ -74,7 +74,7 @@ export function DevicePicker() {
             selected={mode === "solo"}
             icon={<Laptop className="h-4 w-4" />}
             title="This device only"
-            hint="Plays here, on its own."
+            hint={remoteNowPlaying?.isPlaying && other ? `Moves the music here. ${other} stops.` : "Plays here, on its own."}
             onClick={() => pick("solo")}
           />
           <Option

@@ -189,6 +189,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const followedRef = useRef<Seen | null>(null);
   /** Set by the user's own choice, so the mode change it causes is not mistaken for the leader leaving. */
   const choseRef = useRef(false);
+  /** Set when "This device only" takes playback over; broadcast so the other device stops. */
+  const takeoverRef = useRef<number | undefined>(undefined);
+  /** Where to pick the other device's track up once it has loaded here. */
+  const pendingSeekRef = useRef<{ fileId: string; at: number; since: number } | null>(null);
   const chooseMode = useCallback((next: "solo" | "lead") => {
     choseRef.current = true;
     // Joining adopts the other device's state outright, once.
@@ -200,7 +204,41 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     if (next === "solo" && remoteNowPlaying?.audioOn === remoteNowPlaying?.deviceId) {
       setOptedOutOf(remoteNowPlaying?.leadSince ?? 0);
     }
+    // "This device only" while the other device plays is a handoff: the music moves here, at the
+    // same spot, and the other device stops.
+    const remote = remoteNowPlaying;
+    const remoteFile = remote?.queue[remote.currentIndex];
+    if (next === "solo" && remote?.isPlaying && remoteFile) {
+      takeoverRef.current = Date.now();
+      const local = playerRef.current;
+      const at = remote.progress + Math.max(0, (Date.now() - remote.updatedAt) / 1000);
+      if (local.currentFile?.id !== remoteFile.id) {
+        pendingSeekRef.current = { fileId: remoteFile.id, at, since: Date.now() };
+        local.play(remote.queue, remote.currentIndex, remote.source ?? undefined);
+      } else {
+        local.seek(at);
+        if (!local.isPlaying) local.togglePlay("sync");
+      }
+    }
   }, [remoteNowPlaying]);
+
+  // Finishes a handoff: once the other device's track has loaded here, jump to where it was.
+  useEffect(() => {
+    const pending = pendingSeekRef.current;
+    if (!pending || player.currentFile?.id !== pending.fileId || !(player.duration > 0)) return;
+    pendingSeekRef.current = null;
+    player.seek(pending.at + (Date.now() - pending.since) / 1000);
+  }, [player, player.currentFile?.id, player.duration]);
+
+  // The other side of a handoff: another device took playback over, so this one stops. Each
+  // takeover is acted on once, and only while fresh, so an old one in a heartbeat does nothing.
+  const handledTakeoverRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const takeover = remoteNowPlaying?.takeover;
+    if (!takeover || takeover === handledTakeoverRef.current) return;
+    handledTakeoverRef.current = takeover;
+    if (Date.now() - takeover < HEARTBEAT_MS && playerRef.current.isPlaying) playerRef.current.togglePlay("sync");
+  }, [remoteNowPlaying?.takeover]);
   const toggleSynced = useCallback(() => chooseMode(chosen === "solo" ? "lead" : "solo"), [chosen, chooseMode]);
 
   // Following is derived, not stored: another device's own broadcast says it leads. If both chose
@@ -259,6 +297,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       // leader's choice is not overturned by this device's broadcast).
       audioOn: mode === "lead" ? deviceId : mode === "follow" ? remoteLeader?.deviceId : undefined,
       leadSince: mode === "lead" ? leadSince : undefined,
+      takeover: takeoverRef.current,
     };
     socket.send(JSON.stringify(state));
   }, [

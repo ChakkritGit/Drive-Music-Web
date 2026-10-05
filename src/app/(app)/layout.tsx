@@ -76,7 +76,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Sidebar />
-      <div className="flex min-h-0 flex-1 flex-col lg:pl-60">
+      <div className="app-content flex min-h-0 flex-1 flex-col transition-[padding] duration-200 lg:pl-60">
         {session.error === "RefreshAccessTokenError" && (
           <div className="bg-amber-50 px-6 py-2 text-center text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
             Your Google session expired.{" "}

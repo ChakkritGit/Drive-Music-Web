@@ -162,4 +162,6 @@ export interface SyncState {
   audioOn?: string;
   /** When the leading device chose to lead, so two devices that both choose it settle on the later. */
   leadSince?: number;
+  /** When this device took playback over with "This device only"; others playing stop for it. */
+  takeover?: number;
 }

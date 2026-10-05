@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
@@ -90,6 +90,15 @@ export function Player() {
       (route) => pathname === route || pathname.startsWith(`${route}/`),
     );
   const [showUpNext, setShowUpNext] = useState(false);
+  // The page makes room for the queue panel (see .app-content in globals.css).
+  useEffect(() => {
+    if (!showUpNext) return;
+    document.documentElement.dataset.queueOpen = "";
+    return () => {
+      delete document.documentElement.dataset.queueOpen;
+    };
+  }, [showUpNext]);
+
 
   // After every hook above — the Player is mounted globally (Providers.tsx), so bailing out here
   // only hides the bar; playback and all its state keep running untouched.
@@ -109,7 +118,7 @@ export function Player() {
       <aside
         aria-label="Up next"
         className={clsx(
-          "fixed top-0 right-0 z-30 flex w-full max-w-sm animate-[slideInRight_220ms_ease-out] flex-col border-l border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950",
+          "fixed top-0 right-0 z-30 flex w-full animate-[slideInRight_220ms_ease-out] flex-col border-l border-zinc-200 bg-white shadow-2xl lg:w-96 lg:shadow-none dark:border-zinc-800 dark:bg-zinc-950",
           hasBottomNav ? "bottom-[calc(8.5rem+env(safe-area-inset-bottom))] lg:bottom-24" : "bottom-24",
         )}
       >
