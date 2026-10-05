@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Play, Square, X } from "lucide-react";
 import clsx from "clsx";
 import type { DriveFile } from "@/types";
@@ -118,7 +119,8 @@ export function TransitionEditor({ from, to, onClose }: TransitionEditorProps) {
   const incomingStart =
     settings.incomingStartSeconds ?? toAnalysis?.mixInSeconds ?? toAnalysis?.firstBeatSeconds ?? 0;
 
-  return (
+  // Rendered into <body>, so no parent (the queue panel, an animating row) can trap or cover it.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:px-6"
       onClick={onClose}
@@ -362,7 +364,8 @@ export function TransitionEditor({ from, to, onClose }: TransitionEditorProps) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

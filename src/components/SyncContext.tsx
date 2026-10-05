@@ -145,6 +145,19 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     playerRef.current = player;
   });
 
+  // Pauses for a sync reason at most once per play state. togglePlay is a toggle, and the player's
+  // state only updates on the next render, so two effects pausing in the same commit (a takeover
+  // and the leader stepping down arrive together) would pause and then resume.
+  const syncPausedRef = useRef(false);
+  useEffect(() => {
+    syncPausedRef.current = false;
+  }, [player.isPlaying]);
+  const pauseForSync = useCallback(() => {
+    if (!playerRef.current.isPlaying || syncPausedRef.current) return;
+    syncPausedRef.current = true;
+    playerRef.current.togglePlay("sync");
+  }, []);
+
   const hostConfigured = Boolean(process.env.NEXT_PUBLIC_PARTYKIT_HOST);
 
   // Resolve which room to join once signed in — the id is derived server-side (see
@@ -206,9 +219,13 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     }
     // "This device only" while the other device plays is a handoff: the music moves here, at the
     // same spot, and the other device stops.
+    // Not when the other device is only mirroring this one (it stops by itself once this device
+    // stops leading), nor when this device already plays its own music.
     const remote = remoteNowPlaying;
     const remoteFile = remote?.queue[remote.currentIndex];
-    if (next === "solo" && remote?.isPlaying && remoteFile) {
+    const mirroringMe = remote?.audioOn === deviceId;
+    const playingOwn = chosen === "solo" && playerRef.current.isPlaying;
+    if (next === "solo" && remote?.isPlaying && remoteFile && !mirroringMe && !playingOwn) {
       takeoverRef.current = Date.now();
       const local = playerRef.current;
       const at = remote.progress + Math.max(0, (Date.now() - remote.updatedAt) / 1000);
@@ -220,7 +237,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         if (!local.isPlaying) local.togglePlay("sync");
       }
     }
-  }, [remoteNowPlaying]);
+  }, [remoteNowPlaying, deviceId, chosen]);
 
   // Finishes a handoff: once the other device's track has loaded here, jump to where it was.
   useEffect(() => {
@@ -237,8 +254,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     const takeover = remoteNowPlaying?.takeover;
     if (!takeover || takeover === handledTakeoverRef.current) return;
     handledTakeoverRef.current = takeover;
-    if (Date.now() - takeover < HEARTBEAT_MS && playerRef.current.isPlaying) playerRef.current.togglePlay("sync");
-  }, [remoteNowPlaying?.takeover]);
+    if (Date.now() - takeover < HEARTBEAT_MS) pauseForSync();
+  }, [remoteNowPlaying?.takeover, pauseForSync]);
   const toggleSynced = useCallback(() => chooseMode(chosen === "solo" ? "lead" : "solo"), [chosen, chooseMode]);
 
   // Following is derived, not stored: another device's own broadcast says it leads. If both chose
@@ -246,11 +263,6 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const { mode, leaderId } = syncMode({ chosen, leadSince, optedOutOf, remote: remoteNowPlaying });
   const remoteLeader = leaderId ? remoteNowPlaying : null;
   const synced = mode !== "solo";
-
-  // A follower is heard nowhere: only the leader's speakers play.
-  useEffect(() => {
-    playerRef.current.setOutputMuted(mode === "follow");
-  }, [mode]);
 
   // When the leader stops leading (or goes quiet), a follower stops too, rather than suddenly
   // being heard. A follower that chose to play here itself carries on.
@@ -260,9 +272,13 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     previousModeRef.current = mode;
     const chose = choseRef.current;
     choseRef.current = false;
-    if (was === "follow" && mode === "solo" && !chose && playerRef.current.isPlaying) {
-      playerRef.current.togglePlay("sync");
-    }
+    if (was === "follow" && mode === "solo" && !chose) pauseForSync();
+  }, [mode, pauseForSync]);
+
+  // A follower is heard nowhere: only the leader's speakers play. Declared after the pause above,
+  // so a follower whose leader stepped down is paused before it is unmuted.
+  useEffect(() => {
+    playerRef.current.setOutputMuted(mode === "follow");
   }, [mode]);
 
   useEffect(() => {

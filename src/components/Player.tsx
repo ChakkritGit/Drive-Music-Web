@@ -118,7 +118,7 @@ export function Player() {
       <aside
         aria-label="Up next"
         className={clsx(
-          "fixed top-0 right-0 z-30 flex w-full animate-[slideInRight_220ms_ease-out] flex-col border-l border-zinc-200 bg-white shadow-2xl lg:w-96 lg:shadow-none dark:border-zinc-800 dark:bg-zinc-950",
+          "fixed top-0 right-0 z-20 flex w-full animate-[slideInRight_220ms_ease-out] flex-col border-l border-zinc-200 bg-white shadow-2xl lg:w-96 lg:shadow-none dark:border-zinc-800 dark:bg-zinc-950",
           hasBottomNav ? "bottom-[calc(8.5rem+env(safe-area-inset-bottom))] lg:bottom-24" : "bottom-24",
         )}
       >
@@ -160,7 +160,7 @@ export function Player() {
     )}
     <div
       className={clsx(
-        "fixed inset-x-0 z-20 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95",
+        "fixed inset-x-0 z-30 border-t border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95",
         // Inside the app shell: above the phone's bottom nav, and beside the desktop sidebar.
         hasBottomNav
           ? "bottom-[calc(4rem+env(safe-area-inset-bottom))] lg:bottom-0 lg:left-60"
