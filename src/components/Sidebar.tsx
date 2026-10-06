@@ -1,5 +1,6 @@
 "use client";
 
+import { canViewAnalytics } from "@/lib/admin";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
@@ -64,7 +65,7 @@ export function Sidebar() {
 
       <div className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
         <NavItem href="/settings" icon={<Settings className="h-[18px] w-[18px]" />} label="Settings" active={pathname.startsWith("/settings")} />
-        <NavItem href="/admin" icon={<Gauge className="h-[18px] w-[18px]" />} label="Analytics" active={pathname.startsWith("/admin")} />
+        {canViewAnalytics(session?.user?.email) && <NavItem href="/admin" icon={<Gauge className="h-[18px] w-[18px]" />} label="Analytics" active={pathname.startsWith("/admin")} />}
         <div className="mt-2 flex items-center gap-2.5 rounded-lg px-3 py-2">
           {session?.user?.image ? (
             // eslint-disable-next-line @next/next/no-img-element

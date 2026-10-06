@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Check,
@@ -32,7 +33,7 @@ export function TrackActionsMenu({
     usePlaylists();
   const [open, setOpen] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
-  const [dropUp, setDropUp] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
   const [newName, setNewName] = useState("");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -41,7 +42,7 @@ export function TrackActionsMenu({
   useEffect(() => {
     if (!open) return;
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) {
         setOpen(false);
       }
     }
@@ -63,8 +64,19 @@ export function TrackActionsMenu({
     if (!open) return;
     const button = containerRef.current?.getBoundingClientRect();
     const height = menuRef.current?.offsetHeight ?? 0;
-    if (button) setDropUp(button.bottom + height > window.innerHeight);
+    if (button) setPosition({
+      top: Math.max(8, Math.min(button.bottom + height + 8 > window.innerHeight ? button.top - height - 4 : button.bottom + 4, window.innerHeight - height - 8)),
+      left: Math.max(8, Math.min(button.right - 224, window.innerWidth - 232)),
+    });
   }, [open, showPlaylists]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnMove = (event: Event) => { if (!menuRef.current?.contains(event.target as Node)) setOpen(false); };
+    window.addEventListener("resize", closeOnMove);
+    document.addEventListener("scroll", closeOnMove, true);
+    return () => { window.removeEventListener("resize", closeOnMove); document.removeEventListener("scroll", closeOnMove, true); };
+  }, [open]);
 
   function close() {
     setOpen(false);
@@ -95,14 +107,13 @@ export function TrackActionsMenu({
         <MoreVertical className="h-4 w-4" />
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
           ref={menuRef}
           role="menu"
-          className={clsx(
-            "absolute right-0 z-20 w-56 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900",
-            dropUp ? "bottom-full mb-1" : "top-full mt-1",
-          )}
+          style={position}
+          onClick={e => e.stopPropagation()}
+          className="fixed z-[100] max-h-[calc(100dvh-1rem)] w-56 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
         >
           {showPlaylists ? (
             <>
@@ -197,7 +208,7 @@ export function TrackActionsMenu({
               )}
             </ul>
           )}
-        </div>
+        </div>, document.body
       )}
     </div>
   );

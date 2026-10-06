@@ -19,6 +19,7 @@ import { usePlayer } from "@/components/PlayerContext";
 import { PlayPauseIcon } from "@/components/PlayPauseIcon";
 import { MixGlow } from "@/components/MixGlow";
 import { usePlaylists } from "@/components/PlaylistsContext";
+import { DevicePicker } from "@/components/DevicePicker";
 import { useSync } from "@/components/SyncContext";
 import { getAverageColor } from "@/lib/color";
 import { TrackRow } from "@/components/TrackRow";
@@ -65,7 +66,7 @@ export function FullPlayer() {
     analyses,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
-  const { remoteNowPlaying, synced, toggleSynced, syncAvailable, mode, leaderName } = useSync();
+  const { outputName, outputId, deviceId } = useSync();
 
   const mixSummary = currentFile ? analysisSummary(analyses.get(currentFile.id)) : "";
   // Whether the mix engine is set up for this track — both switches on, and something loaded.
@@ -152,6 +153,7 @@ export function FullPlayer() {
   return (
     <div
       aria-hidden={!isExpanded}
+      inert={!isExpanded}
       className={clsx(
         "fixed inset-0 z-50 flex flex-col overflow-hidden bg-white transition-all duration-300 ease-out dark:bg-black",
         isExpanded
@@ -244,12 +246,10 @@ export function FullPlayer() {
             {currentFile && crossfadeEnabled && autoMixEnabled && mixSummary && (
               <p className="mt-0.5 truncate text-xs tabular-nums text-zinc-400">{mixSummary}</p>
             )}
-            {synced && remoteNowPlaying && (
+            {outputName && (
               <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent-strong">
                 <Users className="h-3 w-3" />
-                {mode === "follow"
-                  ? `Muted here · sound on ${leaderName ?? remoteNowPlaying.deviceName}`
-                  : `Synced with ${remoteNowPlaying.deviceName}, muted there`}
+                {outputId === deviceId ? "Sound on this device" : `Sound on ${outputName}`}
               </p>
             )}
           </div>
@@ -357,21 +357,7 @@ export function FullPlayer() {
         {/* Secondary actions, one step down from the transport row: same visual weight as each
             other, clearly below play/pause rather than tucked up in the header. */}
         <div className="-mt-4 flex items-center gap-6">
-          {syncAvailable && (
-            <button
-              onClick={toggleSynced}
-              className={clsx(
-                "rounded-full p-2 transition active:scale-90",
-                synced
-                  ? "text-accent-strong"
-                  : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-              )}
-              aria-label={synced ? "Stop listening together" : "Listen together"}
-              title={synced ? "Listening together" : "Listen together"}
-            >
-              <Users className="h-5 w-5" />
-            </button>
-          )}
+          <DevicePicker />
           <button
             onClick={() => setShowQueue(true)}
             className="relative rounded-full p-2 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
@@ -387,18 +373,16 @@ export function FullPlayer() {
 
       </div>
 
-      {/* Sheet, not a separate portal: it belongs to this overlay, so it lives inside it and
-          inherits its stacking context (and its aria-hidden while the player is collapsed). */}
+      {/* The queue enters from the right, using the same rows and actions as the bottom player. */}
       {showQueue && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-end">
+        <div className="absolute inset-0 z-10 flex justify-end">
           <button
             className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={() => setShowQueue(false)}
             aria-label="Close queue"
           />
-          {/* Capped and centred rather than edge-to-edge: on a wide window a full-width sheet
-              stretches one narrow list of tracks across the whole screen. */}
-          <div className="relative flex max-h-[70%] w-full max-w-md flex-col animate-[slideUp_250ms_ease-out] rounded-t-3xl border border-b-0 border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-950">
+          {/* Full height, with a capped width on larger screens. */}
+          <div className="relative flex h-full w-full max-w-md flex-col animate-[slideInRight_220ms_ease-out] border-l border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex items-center justify-between px-5 pb-2 pt-4">
               <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
                 Up Next
@@ -426,6 +410,7 @@ export function FullPlayer() {
                     file={file}
                     queue={queue}
                     index={index}
+                    source={currentSource ?? undefined}
                     cachedTrack={cachedTracks.get(file.id)}
                     nextFile={upNext[position + 1]?.file}
                     onRemove={() => removeFromQueue(index)}

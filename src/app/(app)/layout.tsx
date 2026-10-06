@@ -1,10 +1,10 @@
 "use client";
 
 import { Suspense, useRef, useState } from "react";
-import { useSession, signIn } from "next-auth/react";
+import { useSession, signIn, signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Settings } from "lucide-react";
+import { Settings, LogOut, User } from "lucide-react";
 import clsx from "clsx";
 import { SignInScreen } from "@/components/SignInScreen";
 import { AppLogo } from "@/components/AppLogo";
@@ -19,6 +19,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
   const pathname = usePathname();
 
+  const [profileOpen, setProfileOpen] = useState(false);
   const [headerVisible, setHeaderVisible] = useState(true);
   const lastScrollTopRef = useRef(0);
 
@@ -90,7 +91,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         {/* Phones only: on a desktop the sidebar carries the name, settings and account. */}
         <header
           className={clsx(
-            "flex items-center justify-between border-b border-zinc-200 px-4 py-3 transition-transform duration-300 ease-out lg:hidden dark:border-zinc-800",
+            "relative z-40 flex items-center justify-between border-b border-zinc-200 px-4 py-3 transition-transform duration-300 ease-out lg:hidden dark:border-zinc-800",
             headerVisible ? "translate-y-0" : "-translate-y-full",
           )}
         >
@@ -106,10 +107,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             >
               <Settings className="h-[18px] w-[18px]" />
             </Link>
-            {session.user?.image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={session.user.image} alt="" className="h-7 w-7 rounded-full" />
-            )}
+            <div className="relative">
+              <button onClick={() => setProfileOpen(v => !v)} aria-label="Profile" aria-expanded={profileOpen} className="grid h-10 w-10 place-items-center rounded-full">
+                {session.user?.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={session.user.image} alt="" className="h-7 w-7 rounded-full" />
+                ) : <User className="h-5 w-5" />}
+              </button>
+              {profileOpen && <>
+                <button className="fixed inset-0 z-40" aria-label="Close profile" onClick={() => setProfileOpen(false)} />
+                <div className="absolute top-full right-0 z-50 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
+                  <p className="truncate text-sm font-medium">{session.user?.name}</p>
+                  <p className="mt-1 truncate text-xs text-zinc-500">{session.user?.email}</p>
+                  <button onClick={() => signOut()} className="mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
+                    <LogOut className="h-4 w-4" /> Sign out
+                  </button>
+                </div>
+              </>}
+            </div>
           </div>
         </header>
 

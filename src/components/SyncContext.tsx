@@ -1,396 +1,210 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import usePartySocket from "partysocket/react";
-import type { SyncState } from "@/types";
-import { usePlayer } from "@/components/PlayerContext";
-import { follow, type Seen } from "@/lib/follow";
-import { syncMode, type SyncMode } from "@/lib/syncMode";
-
-// Structural changes (track, play/pause, source) publish immediately; a still-playing track's
-// progress otherwise only re-publishes at most this often, so "now playing" catches up on
-// another device in roughly real time without spamming a message every progress tick.
-const PUBLISH_THROTTLE_MS = 3000;
-// Forces a fresh publish at least this often even with nothing structurally changing — the
-// heartbeat other devices rely on to know this device (and its state) is still around.
-const HEARTBEAT_MS = 15000;
-// A device that goes quiet (closed tab, lost network, ...) never gets to send a "goodbye" —
-// so a remote broadcast is only trusted for a few missed heartbeats before being treated as
-// stale and cleared, rather than showing "Playing on X" forever for a device that isn't.
-const STALE_MS = HEARTBEAT_MS * 3;
-const DEVICE_ID_KEY = "drive-music-device-id";
-const DEVICE_NAME_KEY = "drive-music-device-name";
-// How far local playback position is allowed to drift from the synced group's estimated
-// position (network/publish latency, buffering, ...) before snapping back in line.
-const SYNC_DRIFT_TOLERANCE_SEC = 1.5;
-
-function guessDeviceName(): string {
-  if (typeof navigator === "undefined") return "This device";
-  const ua = navigator.userAgent;
-  const browser = /Edg\//.test(ua)
-    ? "Edge"
-    : /Chrome\//.test(ua)
-      ? "Chrome"
-      : /Firefox\//.test(ua)
-        ? "Firefox"
-        : /Safari\//.test(ua)
-          ? "Safari"
-          : "Browser";
-  const os = /Windows/.test(ua)
-    ? "Windows"
-    : /Mac/.test(ua)
-      ? "Mac"
-      : /Android/.test(ua)
-        ? "Android"
-        : /iPhone|iPad/.test(ua)
-          ? "iOS"
-          : "";
-  return os ? `${browser} on ${os}` : browser;
-}
-
-function getOrCreateDeviceId(): string {
-  if (typeof window === "undefined") return "server";
-  const existing = localStorage.getItem(DEVICE_ID_KEY);
-  if (existing) return existing;
-  const id = crypto.randomUUID();
-  localStorage.setItem(DEVICE_ID_KEY, id);
-  return id;
-}
-
+import { SharedPlayerProvider, usePlayer, type PlayerContextValue } from "@/components/PlayerContext";
+import { useToast } from "@/components/ToastContext";
+import { HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, positionAt, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
 
 interface SyncContextValue {
-  /** The latest broadcast from a *different* device, or null if nothing's playing elsewhere
-   * (or we haven't heard from another device yet). */
-  remoteNowPlaying: SyncState | null;
-  /** Whether this device is synced at all (leading or following). */
-  synced: boolean;
-  /** Solo or leading; the quick toggle the phone's Now Playing uses. */
-  toggleSynced: () => void;
-  mode: SyncMode;
-  /** "solo" plays here alone; "lead" keeps the other device in step with only this one heard. */
-  chooseMode: (mode: "solo" | "lead") => void;
-  /** The leading device's name while following. */
-  leaderName: string | null;
-  /** Whether sync is configured at all (a PartyKit host is set) — lets UI hide sync controls
-   * entirely rather than show a toggle that can never connect. */
+  devices: PartyRoom["devices"];
+  deviceId: string | null;
+  outputId: string | null;
+  pendingOutputId: string | null;
+  selectOutput: (id: string) => void;
+  connected: boolean;
   syncAvailable: boolean;
+  outputName: string | null;
 }
-
 const SyncContext = createContext<SyncContextValue | null>(null);
-
-export function useSync(): SyncContextValue {
+export function useSync() {
   const ctx = useContext(SyncContext);
   if (!ctx) throw new Error("useSync must be used within a SyncProvider");
   return ctx;
 }
-
-interface SyncTokenResponse {
-  token: string;
-  roomId: string;
+function deviceName() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : "Safari";
+  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : "Linux";
+  return `${browser} on ${os}`;
 }
-
-async function fetchSyncToken(): Promise<SyncTokenResponse | null> {
-  try {
-    const res = await fetch("/api/sync-token");
-    if (!res.ok) return null;
-    return (await res.json()) as SyncTokenResponse;
-  } catch {
-    return null;
-  }
+async function fetchToken(): Promise<{ token: string; roomId: string } | null> {
+  try { const r = await fetch("/api/sync-token", { cache: "no-store" }); return r.ok ? await r.json() : null; } catch { return null; }
 }
-
-/** Mirrors "what's playing" across every tab/device signed into the same Google account, via
- * a PartyKit room (party/index.ts) keyed to that account. Every device always broadcasts its
- * own state (used for the passive "Playing on X" banner). Devices that opt into `synced`
- * ("Listen together") additionally *apply* every incoming broadcast — track, play/pause, and
- * position — to their own local playback. Since a synced device's own actions get broadcast
- * the same way, two synced devices end up symmetric: whichever one you touch last (play,
- * pause, seek, skip) becomes the state the other pulls itself back in line with. */
+function snapshot(p: PlayerContextValue): PartyPlayback | null {
+  if (!p.currentFile || p.currentIndex === null) return null;
+  // Artwork remains device-local to keep websocket messages bounded for large libraries.
+  const { pictureDataUrl: _picture, ...meta } = p.currentMeta ?? {};
+  void _picture;
+  return { queue: p.queue, currentIndex: p.currentIndex, source: p.currentSource,
+    progress: p.progress, duration: p.duration, isPlaying: p.isPlaying, shuffle: p.shuffle,
+    shuffleOrder: p.shuffleOrder, playNextIndex: p.playNextIndex, loopMode: p.loopMode, meta, updatedAt: Date.now() };
+}
 export function SyncProvider({ children }: { children: React.ReactNode }) {
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const player = usePlayer();
-  const [deviceId] = useState(getOrCreateDeviceId);
-  const [deviceName] = useState(
-    () =>
-      (typeof window !== "undefined" &&
-        localStorage.getItem(DEVICE_NAME_KEY)) ||
-      guessDeviceName(),
-  );
+  const { showToast } = useToast();
+  const available = Boolean(process.env.NEXT_PUBLIC_PARTYKIT_HOST);
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [remoteNowPlaying, setRemoteNowPlaying] = useState<SyncState | null>(
-    null,
-  );
-  const lastPublishedKeyRef = useRef("");
-  const lastPublishTimeRef = useRef(0);
-  // Bumped on an interval purely to re-run the outbound-publish effect below on a heartbeat
-  // cadence, even when nothing about local playback has actually changed.
-  const [heartbeatTick, setHeartbeatTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setHeartbeatTick((t) => t + 1), HEARTBEAT_MS);
-    return () => clearInterval(id);
-  }, []);
-  // Lets the reconciliation effect below always call the latest play()/togglePlay()/seek()
-  // without needing `player` (which changes identity on every progress tick) in its deps.
+  const [room, setRoom] = useState<PartyRoom | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [lease, setLease] = useState(0);
+  const [now, setNow] = useState(0);
   const playerRef = useRef(player);
-  useEffect(() => {
-    playerRef.current = player;
-  });
-
-  // Pauses for a sync reason at most once per play state. togglePlay is a toggle, and the player's
-  // state only updates on the next render, so two effects pausing in the same commit (a takeover
-  // and the leader stepping down arrive together) would pause and then resume.
-  const syncPausedRef = useRef(false);
-  useEffect(() => {
-    syncPausedRef.current = false;
-  }, [player.isPlaying]);
-  const pauseForSync = useCallback(() => {
-    if (!playerRef.current.isPlaying || syncPausedRef.current) return;
-    syncPausedRef.current = true;
-    playerRef.current.togglePlay("sync");
+  const roomRef = useRef(room);
+  const idRef = useRef<string | null>(null);
+  const leaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applied = useRef("");
+  const leaseUntil = useRef(0);
+  useEffect(() => { playerRef.current = player; });
+  const silence = useCallback(() => {
+    leaseUntil.current = 0;
+    if (leaseTimer.current) clearTimeout(leaseTimer.current);
+    playerRef.current.setOutputMuted(true);
+    applied.current = "";
+    setLease(0);
   }, []);
 
-  const hostConfigured = Boolean(process.env.NEXT_PUBLIC_PARTYKIT_HOST);
-
-  // Resolve which room to join once signed in — the id is derived server-side (see
-  // src/app/api/sync-token/route.ts) so the client never needs to hash the email itself.
   useEffect(() => {
-    if (status !== "authenticated" || !hostConfigured) return;
+    if (!available || status !== "authenticated") return;
     let cancelled = false;
-    fetchSyncToken().then((result) => {
+    const resolve = async () => {
+      const result = await fetchToken();
       if (!cancelled && result) setRoomId(result.roomId);
-    });
-    return () => {
-      cancelled = true;
     };
-  }, [status, hostConfigured]);
+    void resolve();
+    const timer = setInterval(resolve, 30000);
+    return () => { cancelled = true; clearInterval(timer); setRoomId(null); setRoom(null); roomRef.current = null; silence(); };
+  }, [available, status, session?.user?.email, silence]);
 
   const socket = usePartySocket({
     host: process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "",
-    // Matches the Durable Object binding name in wrangler.jsonc ("SyncServer" kebab-cased) —
-    // partyserver routes /parties/:party/:room to the env binding whose name kebab-cases to
-    // :party, see party/index.ts.
-    party: "sync-server",
-    room: roomId ?? "unset",
-    enabled: status === "authenticated" && hostConfigured && Boolean(roomId),
-    // Re-fetches a fresh (short-lived) token on every connect/reconnect attempt.
-    query: async () => ({ token: (await fetchSyncToken())?.token ?? "" }),
+    party: "sync-server", room: roomId ?? "unset",
+    enabled: available && status === "authenticated" && !!roomId,
+    query: async () => ({ token: (await fetchToken())?.token ?? "" }),
+    onOpen(event) {
+      // Connection ids are allocated per socket (not localStorage), so two tabs are separate outputs.
+      (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, name: deviceName() }));
+    },
+    onClose() { setConnected(false); silence(); },
+    onError() { setConnected(false); silence(); },
+    // This callback runs on websocket events, never during render.
+    /* eslint-disable react-hooks/purity */
     onMessage(event) {
       if (typeof event.data !== "string") return;
-      try {
-        const state = JSON.parse(event.data) as SyncState;
-        if (state.deviceId !== deviceId) setRemoteNowPlaying(state);
-      } catch {
-        // Ignore malformed messages rather than crash the socket handler.
+      let m;
+      try { m = JSON.parse(event.data); } catch { return; }
+      if (m.type === "welcome") {
+        idRef.current = m.deviceId; setDeviceId(m.deviceId); setConnected(true);
+        socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
+      } else if (m.type === "room" && m.protocol === PARTY_PROTOCOL) {
+        if (m.playback && typeof m.serverTime === "number") {
+          m.playback.updatedAt = Date.now() - Math.max(0, m.serverTime - m.playback.updatedAt);
+        }
+        roomRef.current = m; setRoom(m);
+        if (m.outputId !== idRef.current) {
+          silence();
+          socket.send(JSON.stringify({ type: "released", revision: m.revision }));
+        } else if (leaseUntil.current <= performance.now()) {
+          socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
+        }
+      } else if (m.type === "lease" && m.granted && roomRef.current?.outputId === idRef.current && m.revision === roomRef.current.revision) {
+        const until = m.sent + LEASE_MS;
+        if (until <= performance.now() || until < leaseUntil.current) return;
+        leaseUntil.current = until;
+        if (leaseTimer.current) clearTimeout(leaseTimer.current);
+        leaseTimer.current = setTimeout(silence, until - performance.now());
+        playerRef.current.grantPartyLease(until);
+        setLease(until);
       }
     },
+    /* eslint-enable react-hooks/purity */
   });
-
-  const [chosen, setChosen] = useState<"solo" | "lead">("solo");
-  const [leadSince, setLeadSince] = useState(0);
-  /** The lead (by its leadSince) this device stepped out of to play on its own. */
-  const [optedOutOf, setOptedOutOf] = useState<number | null>(null);
-  /** The remote state last acted on; see follow() for why changes, not levels, are followed. */
-  const followedRef = useRef<Seen | null>(null);
-  /** Set by the user's own choice, so the mode change it causes is not mistaken for the leader leaving. */
-  const choseRef = useRef(false);
-  /** Set when "This device only" takes playback over; broadcast so the other device stops. */
-  const takeoverRef = useRef<number | undefined>(undefined);
-  /** Where to pick the other device's track up once it has loaded here. */
-  const pendingSeekRef = useRef<{ fileId: string; at: number; since: number } | null>(null);
-  const chooseMode = useCallback((next: "solo" | "lead") => {
-    choseRef.current = true;
-    // Joining adopts the other device's state outright, once.
-    followedRef.current = null;
-    setChosen(next);
-    if (next === "lead") setLeadSince(Date.now());
-    // Leaving a follow for "this device only" must stop following that lead, or the leader's next
-    // broadcast would pull this device straight back in.
-    if (next === "solo" && remoteNowPlaying?.audioOn === remoteNowPlaying?.deviceId) {
-      setOptedOutOf(remoteNowPlaying?.leadSince ?? 0);
-    }
-    // "This device only" while the other device plays is a handoff: the music moves here, at the
-    // same spot, and the other device stops.
-    // Not when the other device is only mirroring this one (it stops by itself once this device
-    // stops leading), nor when this device already plays its own music.
-    const remote = remoteNowPlaying;
-    const remoteFile = remote?.queue[remote.currentIndex];
-    const mirroringMe = remote?.audioOn === deviceId;
-    const playingOwn = chosen === "solo" && playerRef.current.isPlaying;
-    if (next === "solo" && remote?.isPlaying && remoteFile && !mirroringMe && !playingOwn) {
-      takeoverRef.current = Date.now();
-      const local = playerRef.current;
-      const at = remote.progress + Math.max(0, (Date.now() - remote.updatedAt) / 1000);
-      if (local.currentFile?.id !== remoteFile.id) {
-        pendingSeekRef.current = { fileId: remoteFile.id, at, since: Date.now() };
-        local.play(remote.queue, remote.currentIndex, remote.source ?? undefined);
-      } else {
-        local.seek(at);
-        if (!local.isPlaying) local.togglePlay("sync");
-      }
-    }
-  }, [remoteNowPlaying, deviceId, chosen]);
-
-  // Finishes a handoff: once the other device's track has loaded here, jump to where it was.
   useEffect(() => {
-    const pending = pendingSeekRef.current;
-    if (!pending || player.currentFile?.id !== pending.fileId || !(player.duration > 0)) return;
-    pendingSeekRef.current = null;
-    player.seek(pending.at + (Date.now() - pending.since) / 1000);
-  }, [player, player.currentFile?.id, player.duration]);
-
-  // The other side of a handoff: another device took playback over, so this one stops. Each
-  // takeover is acted on once, and only while fresh, so an old one in a heartbeat does nothing.
-  const handledTakeoverRef = useRef<number | undefined>(undefined);
+    if (!connected) return;
+    const timer = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
+    }, HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [socket, connected]);
   useEffect(() => {
-    const takeover = remoteNowPlaying?.takeover;
-    if (!takeover || takeover === handledTakeoverRef.current) return;
-    handledTakeoverRef.current = takeover;
-    if (Date.now() - takeover < HEARTBEAT_MS) pauseForSync();
-  }, [remoteNowPlaying?.takeover, pauseForSync]);
-  const toggleSynced = useCallback(() => chooseMode(chosen === "solo" ? "lead" : "solo"), [chosen, chooseMode]);
-
-  // Following is derived, not stored: another device's own broadcast says it leads. If both chose
-  // to lead, the later choice wins and the other follows.
-  const { mode, leaderId } = syncMode({ chosen, leadSince, optedOutOf, remote: remoteNowPlaying });
-  const remoteLeader = leaderId ? remoteNowPlaying : null;
-  const synced = mode !== "solo";
-
-  // When the leader stops leading (or goes quiet), a follower stops too, rather than suddenly
-  // being heard. A follower that chose to play here itself carries on.
-  const previousModeRef = useRef<SyncMode>(mode);
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => { clearInterval(timer); if (leaseTimer.current) clearTimeout(leaseTimer.current); };
+  }, []);
+  const command = useCallback((value: PartyCommand) => {
+    if (!connected || socket.readyState !== WebSocket.OPEN) { showToast("Reconnect to Party Play to control playback."); return; }
+    playerRef.current.unlockAudio();
+    socket.send(JSON.stringify({ type: "command", command: value }));
+  }, [connected, socket, showToast]);
+  const setPartyCommandHandler = player.setPartyCommandHandler;
   useEffect(() => {
-    const was = previousModeRef.current;
-    previousModeRef.current = mode;
-    const chose = choseRef.current;
-    choseRef.current = false;
-    if (was === "follow" && mode === "solo" && !chose) pauseForSync();
-  }, [mode, pauseForSync]);
-
-  // A follower is heard nowhere: only the leader's speakers play. Declared after the pause above,
-  // so a follower whose leader stepped down is paused before it is unmuted.
-  useEffect(() => {
-    playerRef.current.setOutputMuted(mode === "follow");
-  }, [mode]);
+    setPartyCommandHandler(available ? command : null);
+    return () => setPartyCommandHandler(null);
+  }, [available, command, setPartyCommandHandler]);
+  const selectOutput = useCallback((id: string) => {
+    if (!connected || socket.readyState !== WebSocket.OPEN) return;
+    if (id === idRef.current) playerRef.current.unlockAudio();
+    socket.send(JSON.stringify({ type: "output", id, seed: snapshot(playerRef.current) }));
+  }, [connected, socket]);
 
   useEffect(() => {
-    if (status !== "authenticated" || !roomId || !hostConfigured) return;
-    if (!player.currentFile) return; // nothing loaded here yet — don't publish an empty state
+    if (!available) { playerRef.current.setOutputMuted(false); return; }
+    if (!connected || !room || !deviceId || room.outputId !== deviceId || lease <= performance.now()) return;
+    const key = `${deviceId}:${room.revision}`;
+    if (applied.current === key) return;
+    applied.current = key;
+    playerRef.current.setOutputMuted(false);
+    if (room.playback) playerRef.current.applyPartyPlayback(room.playback, room.revision);
+  }, [available, connected, room, deviceId, lease]);
 
-    const structuralKey = `${player.currentFile.id}:${player.isPlaying}:${player.currentSource?.id ?? ""}:${mode}`;
-    const now = Date.now();
-    const isStructuralChange = structuralKey !== lastPublishedKeyRef.current;
-    if (
-      !isStructuralChange &&
-      now - lastPublishTimeRef.current < PUBLISH_THROTTLE_MS
-    )
-      return;
-    lastPublishedKeyRef.current = structuralKey;
-    lastPublishTimeRef.current = now;
+  // Only the output reports real playback (including automatic transitions and autoplay failures).
+  // The revision barrier prevents a render from before a command echoing stale state back.
+  const lastReport = useRef({ key: "", at: 0 });
+  useEffect(() => {
+    if (!connected || !room || room.outputId !== deviceId || leaseUntil.current <= performance.now()
+      || player.syncRevision !== room.revision || player.isLoading || player.isPreviewingTransition) return;
+    const p = snapshot(player);
+    if (!p) return;
+    const key = JSON.stringify({ ...p, progress: 0, updatedAt: 0 });
+    if (key === lastReport.current.key && Date.now() - lastReport.current.at < 2000) return;
+    lastReport.current = { key, at: Date.now() };
+    socket.send(JSON.stringify({ type: "report", revision: room.revision, playback: p }));
+  }, [connected, deviceId, room, player, socket]);
 
-    const state: SyncState = {
-      queue: player.queue,
-      currentIndex: player.queue.findIndex(
-        (f) => f.id === player.currentFile!.id,
-      ),
-      source: player.currentSource,
-      progress: player.progress,
-      isPlaying: player.isPlaying,
-      shuffle: player.shuffle,
-      loopMode: player.loopMode,
-      deviceId,
-      deviceName,
-      updatedAt: now,
-      // Who is heard: this device while leading; while following, the leader (repeated, so the
-      // leader's choice is not overturned by this device's broadcast).
-      audioOn: mode === "lead" ? deviceId : mode === "follow" ? remoteLeader?.deviceId : undefined,
-      leadSince: mode === "lead" ? leadSince : undefined,
-      takeover: takeoverRef.current,
+  const shared = useMemo((): PlayerContextValue => {
+    if (!available) return player;
+    const p = room?.playback;
+    const currentFile = p?.queue[p.currentIndex] ?? player.currentFile;
+    const localOutput = room?.outputId === deviceId;
+    const preview = localOutput && player.isPreviewingTransition;
+    return { ...player,
+      ...(p ? { queue: p.queue, currentIndex: p.currentIndex, currentFile,
+        currentSource: p.source, currentMeta: (currentFile && player.cachedTracks.get(currentFile.id)?.parsedMeta) || p.meta,
+        isPlaying: preview ? player.isPlaying : p.isPlaying,
+        isLoading: localOutput && player.isLoading,
+        error: localOutput ? player.error : null,
+        progress: room.outputId && !room.pendingOutputId ? positionAt(p, now || p.updatedAt) : p.progress,
+        duration: p.duration, shuffle: p.shuffle, shuffleOrder: p.shuffleOrder, loopMode: p.loopMode,
+        playNextIndex: p.playNextIndex, upNext: upcoming(p).map(index => ({ file: p.queue[index], index })),
+      } : {}),
+      play: (queue, index, source) => command({ type: "play", queue, index, source }),
+      togglePlay: preview ? player.togglePlay : () => command({ type: "toggle" }),
+      next: () => command({ type: "next" }), prev: () => command({ type: "previous" }),
+      seek: seconds => command({ type: "seek", seconds }),
+      toggleShuffle: () => command({ type: "shuffle" }), cycleLoopMode: () => command({ type: "loop" }),
+      addToQueue: file => command({ type: "insert", file }),
+      removeFromQueue: index => { const fileId = p?.queue[index]?.id; if (fileId) command({ type: "remove", index, fileId }); },
+      previewTransition: (...args) => {
+        if (!localOutput) { showToast("Select this device as the output to preview a mix."); return Promise.resolve(); }
+        return player.previewTransition(...args);
+      },
     };
-    socket.send(JSON.stringify(state));
-  }, [
-    status,
-    roomId,
-    hostConfigured,
-    player.currentFile,
-    player.isPlaying,
-    player.progress,
-    player.queue,
-    player.currentSource,
-    player.shuffle,
-    player.loopMode,
-    deviceId,
-    deviceName,
-    socket,
-    heartbeatTick,
-    mode,
-    leadSince,
-    remoteLeader?.deviceId,
-  ]);
-
-  // Broadcasts from a device that's gone quiet (closed tab, lost network, ...) never get a
-  // "goodbye" — so once a remote state hasn't been refreshed for a few missed heartbeats,
-  // stop trusting it rather than showing "Playing on X" forever for a device that isn't.
-  useEffect(() => {
-    if (!remoteNowPlaying) return;
-    const id = setInterval(() => {
-      setRemoteNowPlaying((current) =>
-        current && Date.now() - current.updatedAt > STALE_MS ? null : current,
-      );
-    }, 5000);
-    return () => clearInterval(id);
-  }, [remoteNowPlaying]);
-
-
-  // "Listen together": apply every incoming broadcast to local playback instead of just
-  // showing it in the banner. Runs on every new remoteNowPlaying (at minimum every
-  // HEARTBEAT_MS, immediately on a structural change) so drift — from network latency, a
-  // manual seek, or one device pausing — gets pulled back in line within a few seconds.
-  useEffect(() => {
-    if (!synced || !remoteNowPlaying) return;
-    const remote = remoteNowPlaying;
-    const remoteFile = remote.queue[remote.currentIndex];
-    if (!remoteFile) return;
-    const local = playerRef.current;
-
-    const decision = follow(
-      followedRef.current,
-      { fileId: remoteFile.id, isPlaying: remote.isPlaying },
-      { fileId: local.currentFile?.id, isPlaying: local.isPlaying },
-    );
-    followedRef.current = decision.followed;
-    if (decision.action === "load") local.play(remote.queue, remote.currentIndex, remote.source ?? undefined);
-    if (decision.action === "toggle") local.togglePlay("sync");
-    if (decision.action !== "track-position") return;
-
-    const estimatedRemoteProgress = remote.isPlaying
-      ? remote.progress + Math.max(0, (Date.now() - remote.updatedAt) / 1000)
-      : remote.progress;
-    if (Math.abs(local.progress - estimatedRemoteProgress) > SYNC_DRIFT_TOLERANCE_SEC) {
-      local.seek(estimatedRemoteProgress);
-    }
-  }, [synced, remoteNowPlaying]);
-
-  const value = useMemo<SyncContextValue>(
-    () => ({
-      remoteNowPlaying,
-      synced,
-      toggleSynced,
-      mode,
-      chooseMode,
-      leaderName: mode === "follow" ? (remoteLeader?.deviceName ?? null) : null,
-      syncAvailable: hostConfigured,
-    }),
-    [remoteNowPlaying, synced, toggleSynced, mode, chooseMode, remoteLeader, hostConfigured],
-  );
-
-  return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
+  }, [available, player, room, deviceId, now, command, showToast]);
+  const value = useMemo(() => ({ devices: room?.devices ?? [], deviceId, outputId: room?.outputId ?? null,
+    pendingOutputId: room?.pendingOutputId ?? null, selectOutput, connected, syncAvailable: available,
+    outputName: room?.devices.find(d => d.id === room.outputId)?.name ?? null,
+  }), [room, deviceId, selectOutput, connected, available]);
+  return <SyncContext.Provider value={value}><SharedPlayerProvider value={shared}>{children}</SharedPlayerProvider></SyncContext.Provider>;
 }

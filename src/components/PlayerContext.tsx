@@ -21,6 +21,7 @@ import type {
   RecentSource,
   TrackAnalysis,
 } from "@/types";
+import { positionAt, type PartyPlayback, type PartyCommand } from "@/lib/party";
 import { downloadFileFresh } from "@/lib/drive";
 import { recordPause, type PauseSource } from "@/lib/pauseLog";
 import { parseTrackMetadata } from "@/lib/metadata";
@@ -115,7 +116,13 @@ interface DownloadProgress {
   total: number;
 }
 
-interface PlayerContextValue {
+export interface PlayerContextValue {
+  currentIndex: number | null;
+  syncRevision: number;
+  grantPartyLease: (until: number) => void;
+  unlockAudio: () => void;
+  applyPartyPlayback: (playback: PartyPlayback, revision: number) => void;
+  setPartyCommandHandler: (handler: ((command: PartyCommand) => void) | null) => void;
   queue: DriveFile[];
   currentFile: DriveFile | null;
   currentMeta: ParsedMetadata | null;
@@ -248,6 +255,8 @@ interface PlayerContextValue {
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
+
+export const SharedPlayerProvider = PlayerContext.Provider;
 
 export function usePlayer(): PlayerContextValue {
   const ctx = useContext(PlayerContext);
@@ -606,6 +615,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // A gentle, always-on limiter — not user-facing (no toggle/settings) — so boosting a quiet
   // track for volume normalization can't drive a peak into clipping.
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const outputMutedRef = useRef(Boolean(process.env.NEXT_PUBLIC_PARTYKIT_HOST));
+  const outputLeaseUntilRef = useRef(0);
+  const outputGateRef = useRef<GainNode | null>(null);
+  const grantPartyLease = useCallback((until: number) => {
+    outputLeaseUntilRef.current = until;
+    const ctx = audioContextRef.current;
+    const gate = outputGateRef.current;
+    if (!ctx || !gate) return;
+    const remaining = Math.max(0, until - performance.now()) / 1000;
+    gate.gain.cancelScheduledValues(ctx.currentTime);
+    gate.gain.setValueAtTime(!outputMutedRef.current && remaining > 0 ? 1 : 0, ctx.currentTime);
+    // Audio-thread deadline still silences a background tab whose JS timers are throttled.
+    gate.gain.setValueAtTime(0, ctx.currentTime + remaining);
+  }, []);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const analyserDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const audioGraphInitializedRef = useRef(false);
@@ -708,11 +731,23 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     spatialDryGain.connect(compressor);
     spatialWetGain.connect(compressor);
     compressor.connect(analyser);
-    analyser.connect(ctx.destination);
-  }, []);
+    const outputGate = ctx.createGain();
+    outputGate.gain.value = outputMutedRef.current ? 0 : 1;
+    outputGateRef.current = outputGate;
+    analyser.connect(outputGate).connect(ctx.destination);
+    ctx.addEventListener("statechange", () => {
+      if (process.env.NEXT_PUBLIC_PARTYKIT_HOST) grantPartyLease(outputLeaseUntilRef.current);
+    });
+  }, [grantPartyLease]);
 
   useEffect(() => {
     ensureAudioGraph();
+  }, [ensureAudioGraph]);
+
+  const unlockAudio = useCallback(() => {
+    ensureAudioGraph();
+    const ctx = audioContextRef.current;
+    if (needsResume(ctx)) void ctx.resume().catch(() => {});
   }, [ensureAudioGraph]);
 
   const getGainNode = useCallback((audio: HTMLAudioElement | null): GainNode | null => {
@@ -828,6 +863,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const progressRef = useRef(0);
   const lastLoadedFileIdRef = useRef<string | null>(null);
 
+  const partyCommandRef = useRef<((command: PartyCommand) => void) | null>(null);
+  const pendingPartyRef = useRef<{ playback: PartyPlayback; revision: number } | null>(null);
+  const [syncRevision, setSyncRevision] = useState(-1);
+  const setPartyCommandHandler = useCallback((handler: ((command: PartyCommand) => void) | null) => {
+    partyCommandRef.current = handler;
+  }, []);
   const [queue, setQueue] = useState<DriveFile[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const [currentMeta, setCurrentMeta] = useState<ParsedMetadata | null>(null);
@@ -1159,7 +1200,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     loadPlaybackSession().then((session: PlaybackSession | null) => {
-      if (cancelled || !session || session.queue.length === 0) return;
+      if (cancelled || !session || session.queue.length === 0 || pendingPartyRef.current) return;
       pendingRestoreRef.current = { progress: session.progress };
       setQueue(session.queue);
       setCurrentIndex(session.currentIndex);
@@ -1428,7 +1469,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           if (gainNode) {
             gainNode.gain.value = volume * (volumeNormalizationEnabled ? (track.loudnessGain ?? 1) : 1);
           }
-          if (restore) {
+          const party = pendingPartyRef.current;
+          if (party && party.playback.queue[party.playback.currentIndex]?.id === file.id) {
+            audio.currentTime = positionAt(party.playback, Date.now());
+            progressRef.current = audio.currentTime;
+            setProgress(audio.currentTime);
+            if (party.playback.isPlaying && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
+            else audio.pause();
+            if (party.playback.isPlaying && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
+            if (pendingPartyRef.current === party) { pendingPartyRef.current = null; setSyncRevision(party.revision); }
+          } else if (restore) {
             // Restoring the last session — resume position, but don't auto-play (browsers
             // block unprompted audio anyway, and it'd be surprising on a plain page load).
             audio.currentTime = restore.progress;
@@ -1436,13 +1486,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
             setProgress(restore.progress);
           } else {
             audio.currentTime = 0;
-            await tryPlay(audio, audioContextRef.current);
+            if (!outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
           }
         }
       } catch (err) {
         if (!cancelled) {
           console.error("Failed to load track", err);
           setError(err instanceof Error ? err.message : "Failed to load track");
+          setIsPlaying(false);
+          if (pendingPartyRef.current) { setSyncRevision(pendingPartyRef.current.revision); pendingPartyRef.current = null; }
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -1526,6 +1578,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
             ? seedShuffleWindow(newQueue.length, index, computeWeightsFor(newQueue))
             : [],
       );
+      pendingRestoreRef.current = null;
+      if (newQueue[index]?.id === currentFile?.id) {
+        const audio = getActiveAudio();
+        if (audio && !outputMutedRef.current) void tryPlay(audio, audioContextRef.current);
+      }
       setQueue(newQueue);
       setCurrentIndex(index);
       setCurrentSource(source ?? null);
@@ -1538,7 +1595,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }).then(refreshRecentSources);
       }
     },
-    [shuffle, queue, computeWeightsFor, refreshRecentSources, cancelCrossfade],
+    [shuffle, queue, currentFile, getActiveAudio, computeWeightsFor, refreshRecentSources, cancelCrossfade],
   );
 
   // Makes `file` play right after the current track — not at the end of the queue. If it's
@@ -1557,48 +1614,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (alreadyPlayingThis) return;
       cancelCrossfade();
 
-      setQueue((prev) => {
-        if (prev.length === 0) {
-          setCurrentIndex(0);
-          setPlayNextIndex(null);
-          setShuffleOrder([]);
-          return [file];
-        }
-
-        const existingIndex = prev.findIndex((f) => f.id === file.id);
-        const withoutFile =
-          existingIndex === -1 ? prev : prev.filter((f) => f.id !== file.id);
-        // Removing an earlier occurrence shifts every following index (including the current
-        // track's) down by one — track where the currently-playing track ends up.
-        const adjustedCurrentIndex =
-          existingIndex !== -1 &&
-          currentIndex !== null &&
-          existingIndex < currentIndex
-            ? currentIndex - 1
-            : (currentIndex ?? 0);
-
+      if (queue.length === 0) {
+        setQueue([file]);
+        setCurrentIndex(0);
+        setPlayNextIndex(null);
+        setShuffleOrder([]);
+      } else {
+        const existingIndex = queue.findIndex(f => f.id === file.id);
+        const withoutFile = queue.filter(f => f.id !== file.id);
+        const adjustedCurrentIndex = existingIndex !== -1 && currentIndex !== null && existingIndex < currentIndex
+          ? currentIndex - 1 : (currentIndex ?? 0);
         const insertAt = adjustedCurrentIndex + 1;
-        const nextQueue = [...withoutFile];
-        nextQueue.splice(insertAt, 0, file);
-
-        if (adjustedCurrentIndex !== currentIndex) {
-          setCurrentIndex(adjustedCurrentIndex);
-        }
+        withoutFile.splice(insertAt, 0, file);
+        setQueue(withoutFile);
+        setCurrentIndex(adjustedCurrentIndex);
         setPlayNextIndex(insertAt);
-        // Remap the stored positions in place. Discarding the order here would make the whole
-        // rest of "Up Next" re-randomize just because one track was queued next.
-        setShuffleOrder((order) =>
-          order.length === 0
-            ? order
-            : remapShuffleOrderAfterInsert(
-                order,
-                existingIndex === -1 ? null : existingIndex,
-                insertAt,
-                adjustedCurrentIndex,
-              ),
-        );
-        return nextQueue;
-      });
+        setShuffleOrder(order => order.length === 0 ? order : remapShuffleOrderAfterInsert(
+          order, existingIndex === -1 ? null : existingIndex, insertAt, adjustedCurrentIndex,
+        ));
+      }
 
       showToast(`Will play next: ${file.name.replace(/\.[^./]+$/, "")}`);
     },
@@ -1631,6 +1665,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   const togglePlay = useCallback((source?: unknown) => {
+    if (isPreviewingRef.current) {
+      if (suspendedPlaybackRef.current) suspendedPlaybackRef.current.wasPlaying = false;
+      endPreviewRef.current?.();
+      setIsPlaying(false);
+      return;
+    }
+    if (partyCommandRef.current) { partyCommandRef.current({ type: "toggle" }); return; }
     const audio = getActiveAudio();
     if (!audio) return;
     if (audio.paused) {
@@ -1753,6 +1794,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // resolveShuffleOrder sees "current index isn't in the window" and reseeds a whole fresh
   // window from scratch — i.e. shuffle appearing to "re-shuffle everything" on every advance.
   const next = useCallback(() => {
+    if (partyCommandRef.current) { partyCommandRef.current({ type: "next" }); return; }
     cancelCrossfade();
     if (queue.length === 0) return;
     if (currentIndex === null) {
@@ -1773,6 +1815,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [queue, currentIndex, shuffle, advanceShuffle, playNextIndex, cancelCrossfade]);
 
   const prev = useCallback(() => {
+    if (partyCommandRef.current) { partyCommandRef.current({ type: "previous" }); return; }
     cancelCrossfade();
     if (queue.length === 0) return;
     if (currentIndex === null) {
@@ -2323,13 +2366,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
    */
   const previewTransition = useCallback(
     async (from: DriveFile, to: DriveFile, settings: TransitionSettings) => {
-      if (isPreviewingRef.current) return;
+      if (isPreviewingRef.current || outputMutedRef.current) return;
       // Both tracks have to be downloaded for there to be anything to play.
       const [fromTrack, toTrack] = await Promise.all([
         getCachedTrack(from.id),
         getCachedTrack(to.id),
       ]);
-      if (!fromTrack || !toTrack) return;
+      if (!fromTrack || !toTrack || outputMutedRef.current || isPreviewingRef.current) return;
 
       const outgoing = getActiveAudio();
       const incoming = getInactiveAudio();
@@ -2398,6 +2441,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       outgoingGain.gain.value = volume;
       incomingGain.gain.value = 0;
       await tryPlay(outgoing, audioContextRef.current);
+      if (outgoing.paused) { endPreviewRef.current?.(); return; }
+      setIsPlaying(true);
 
       previewLeadTimerRef.current = window.setTimeout(
         () => {
@@ -2441,6 +2486,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!isPreviewingRef.current) return;
     isPreviewingRef.current = false;
     setIsPreviewingTransition(false);
+    setIsPlaying(false);
     window.clearTimeout(previewLeadTimerRef.current);
     window.clearTimeout(previewTailTimerRef.current);
     crossfadeStateRef.current = null;
@@ -2477,7 +2523,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await seekWhenReady(active, suspended.progress);
       progressRef.current = suspended.progress;
       setProgress(suspended.progress);
-      if (suspended.wasPlaying) await tryPlay(active, audioContextRef.current);
+      if (active.getAttribute("src") !== url || isPreviewingRef.current) return;
+      if (suspended.wasPlaying && !outputMutedRef.current) await tryPlay(active, audioContextRef.current);
     })();
   }, [getActiveAudio, getInactiveAudio, getGainNode, currentFile, volume, trackGain]);
 
@@ -2493,6 +2540,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const seek = useCallback(
     (seconds: number) => {
+      if (partyCommandRef.current) { partyCommandRef.current({ type: "seek", seconds }); return; }
       cancelCrossfade();
       const audio = getActiveAudio();
       if (audio) audio.currentTime = seconds;
@@ -2511,9 +2559,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // Each action does only what it says. Both used to toggle, so an OS "play" sent while
     // already playing (headphones reconnecting, another app releasing audio) paused the music.
     navigator.mediaSession.setActionHandler("play", () => {
-      if (getActiveAudio()?.paused) togglePlay();
+      if (partyCommandRef.current) partyCommandRef.current({ type: "playing", value: true });
+      else if (getActiveAudio()?.paused) togglePlay();
     });
     navigator.mediaSession.setActionHandler("pause", () => {
+      if (partyCommandRef.current) { partyCommandRef.current({ type: "playing", value: false }); return; }
       const audio = getActiveAudio();
       if (!audio || audio.paused) return;
       togglePlay("media-session");
@@ -2788,7 +2838,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const handlePlay = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
-      if (e.currentTarget !== getActiveAudio()) return;
+      if (outputMutedRef.current) { e.currentTarget.pause(); return; }
+      if (e.currentTarget !== getActiveAudio() || e.currentTarget.paused) return;
       setIsPlaying(true);
     },
     [getActiveAudio],
@@ -2816,7 +2867,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const handlePause = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
-      if (e.currentTarget !== getActiveAudio()) return;
+      if (e.currentTarget !== getActiveAudio() || !e.currentTarget.paused || isPreviewingRef.current) return;
       // The browser fires `pause` immediately before `ended` when a track reaches its
       // natural end. If a crossfade is still ramping at that exact moment (clock drift
       // between the audio element's own playback clock and the rAF-driven ramp, even with
@@ -2852,13 +2903,57 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [getActiveAudio, cancelCrossfade, persistSession],
   );
 
-  // `muted` on the elements, not a gain: it holds through every gain the mixing code writes.
+  // Revoke sound synchronously before acknowledging a handoff. Also cancel queued fades
+  // and previews, which otherwise could start the inactive element after the acknowledgement.
   const setOutputMuted = useCallback((muted: boolean) => {
-    for (const el of [audioARef.current, audioBRef.current]) if (el) el.muted = muted;
-  }, []);
+    outputMutedRef.current = muted;
+    if (process.env.NEXT_PUBLIC_PARTYKIT_HOST) grantPartyLease(outputLeaseUntilRef.current);
+    if (muted) {
+      if (suspendedPlaybackRef.current) suspendedPlaybackRef.current.wasPlaying = false;
+      cancelCrossfade();
+      pendingPartyRef.current = null;
+      setIsPlaying(false);
+    }
+    for (const el of [audioARef.current, audioBRef.current]) if (el) {
+      el.muted = muted;
+      if (muted) el.pause();
+    }
+  }, [cancelCrossfade, grantPartyLease]);
+
+  const applyPartyPlayback = useCallback((playback: PartyPlayback, revision: number) => {
+    cancelCrossfade();
+    setError(null);
+    const pending = { playback, revision };
+    pendingPartyRef.current = pending;
+    pendingRestoreRef.current = null;
+    setQueue(playback.queue);
+    setCurrentIndex(playback.currentIndex);
+    setCurrentSource(playback.source);
+    setShuffle(playback.shuffle);
+    setShuffleOrder(playback.shuffleOrder);
+    setPlayNextIndex(playback.playNextIndex);
+    setLoopMode(playback.loopMode);
+    const file = playback.queue[playback.currentIndex];
+    const audio = getActiveAudio();
+    if (file?.id === lastLoadedFileIdRef.current && audio?.getAttribute("src")) {
+      void (async () => {
+        audio.currentTime = positionAt(playback, Date.now());
+        progressRef.current = audio.currentTime;
+        setProgress(audio.currentTime);
+        if (playback.isPlaying && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
+        else audio.pause();
+        if (pendingPartyRef.current !== pending) return;
+        if (playback.isPlaying && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
+        setIsPlaying(!audio.paused);
+        pendingPartyRef.current = null;
+        setSyncRevision(revision);
+      })();
+    }
+  }, [cancelCrossfade, getActiveAudio]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
+      currentIndex, syncRevision, applyPartyPlayback, setPartyCommandHandler, grantPartyLease, unlockAudio,
       setOutputMuted,
       queue,
       currentFile,
@@ -2936,6 +3031,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       collapse,
     }),
     [
+      currentIndex, syncRevision, applyPartyPlayback, setPartyCommandHandler, grantPartyLease, unlockAudio,
       setOutputMuted,
       queue,
       currentFile,

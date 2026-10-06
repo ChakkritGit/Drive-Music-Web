@@ -11,7 +11,6 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
-  Users,
   Volume2,
   X,
 } from "lucide-react";
@@ -46,6 +45,7 @@ export function Player() {
     currentSource,
     isPlaying,
     isLoading,
+    isExpanded,
     error,
     progress,
     duration,
@@ -64,16 +64,9 @@ export function Player() {
     cachedTracks,
     removeFromQueue,
   } = usePlayer();
-  const { remoteNowPlaying, synced, chooseMode, mode, leaderName } = useSync();
+  const { outputName, outputId, deviceId, pendingOutputId } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
-  // Only surface what's playing on another device while this one isn't actively playing —
-  // once this device is playing its own track, its own state is what matters locally. Not
-  // gated on `currentFile` alone: a restored-but-paused session (see PlayerContext's
-  // loadPlaybackSession effect) would otherwise permanently hide the banner after the very
-  // first local play, since a device almost always has *some* track loaded after that.
-  const remoteTrack = !isPlaying ? remoteNowPlaying : null;
-  const remoteFile = remoteTrack?.queue[remoteTrack.currentIndex];
   // The mobile bottom tab nav (see app/(app)/layout.tsx) renders only for routes inside that
   // route group (home/browse/playlists/library) once signed in — /admin, /settings, /privacy,
   // /terms, and any other standalone route are all outside it and never get one. Checked as an
@@ -114,7 +107,7 @@ export function Player() {
     <>
     {/* The queue opens as a panel on the right, outside the bar: the bar's backdrop blur would
         otherwise make it the panel's containing block. */}
-    {showUpNext && (
+    {showUpNext && !isExpanded && (
       <aside
         aria-label="Up next"
         className={clsx(
@@ -198,21 +191,15 @@ export function Player() {
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold text-zinc-950 lg:text-base dark:text-zinc-50">
-              {remoteTrack && remoteFile
-                ? remoteFile.name.replace(/\.[^./]+$/, "")
-                : currentFile
-                  ? currentMeta?.title || currentFile.name
-                  : "No track playing"}
+              {currentFile ? currentMeta?.title || currentFile.name : "No track playing"}
             </span>
             <span className="block truncate text-xs text-zinc-500 lg:mt-0.5 lg:text-sm dark:text-zinc-400">
               {error ? (
                 <span className="text-red-500">{error}</span>
-              ) : remoteTrack ? (
-                `Playing on ${remoteTrack.deviceName}`
-              ) : mode === "follow" ? (
-                `Muted here · sound on ${leaderName ?? "another device"}`
-              ) : synced && remoteNowPlaying ? (
-                `Synced with ${remoteNowPlaying.deviceName}`
+              ) : pendingOutputId ? (
+                "Switching output…"
+              ) : outputName ? (
+                outputId === deviceId ? "Sound on this device" : `Sound on ${outputName}`
               ) : (
                 currentMeta?.artist || " "
               )}
@@ -223,48 +210,36 @@ export function Player() {
         {/* Centre: the transport, and on a desktop the timeline under it. */}
         <div className="flex flex-col items-center gap-2">
           <div className="flex items-center gap-1 lg:gap-2">
-            {remoteTrack ? (
-              <button
-                // Hear what the other device is playing here; it carries on in step, muted.
-                onClick={() => chooseMode("lead")}
-                className="flex h-10 cursor-pointer items-center gap-1.5 rounded-full bg-accent px-4 text-xs font-semibold text-zinc-950 transition-colors hover:bg-accent/85"
-              >
-                <Users className="h-3.5 w-3.5" /> Listen together
-              </button>
-            ) : (
-              <>
-                <IconButton
-                  onClick={toggleShuffle}
-                  label="Toggle shuffle"
-                  active={shuffle}
-                  className="hidden lg:grid"
-                >
-                  <Shuffle className="h-4 w-4" />
-                </IconButton>
-                <IconButton onClick={prev} disabled={!currentFile} label="Previous" className="hidden sm:grid">
-                  <SkipBack className="h-[18px] w-[18px]" />
-                </IconButton>
-                <button
-                  onClick={togglePlay}
-                  disabled={!currentFile || isLoading}
-                  className="grid h-10 w-10 place-items-center rounded-full bg-zinc-950 text-white transition hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-30 disabled:hover:scale-100 dark:bg-white dark:text-zinc-950"
-                  aria-label={isPlaying ? "Pause" : "Play"}
-                >
-                  <PlayPauseIcon playing={isPlaying} className="h-4 w-4" />
-                </button>
-                <IconButton onClick={next} disabled={!currentFile} label="Next">
-                  <SkipForward className="h-[18px] w-[18px]" />
-                </IconButton>
-                <IconButton
-                  onClick={cycleLoopMode}
-                  label="Cycle repeat mode"
-                  active={loopMode !== "off"}
-                  className="hidden lg:grid"
-                >
-                  {loopMode === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
-                </IconButton>
-              </>
-            )}
+            <IconButton
+              onClick={toggleShuffle}
+              label="Toggle shuffle"
+              active={shuffle}
+              className="hidden lg:grid"
+            >
+              <Shuffle className="h-4 w-4" />
+            </IconButton>
+            <IconButton onClick={prev} disabled={!currentFile} label="Previous" className="hidden sm:grid">
+              <SkipBack className="h-[18px] w-[18px]" />
+            </IconButton>
+            <button
+              onClick={togglePlay}
+              disabled={!currentFile || isLoading}
+              className="grid h-10 w-10 place-items-center rounded-full bg-zinc-950 text-white transition hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-30 disabled:hover:scale-100 dark:bg-white dark:text-zinc-950"
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              <PlayPauseIcon playing={isPlaying} className="h-4 w-4" />
+            </button>
+            <IconButton onClick={next} disabled={!currentFile} label="Next">
+              <SkipForward className="h-[18px] w-[18px]" />
+            </IconButton>
+            <IconButton
+              onClick={cycleLoopMode}
+              label="Cycle repeat mode"
+              active={loopMode !== "off"}
+              className="hidden lg:grid"
+            >
+              {loopMode === "one" ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+            </IconButton>
           </div>
           <div className="hidden w-full max-w-xl items-center gap-2.5 text-xs text-zinc-500 tabular-nums lg:flex dark:text-zinc-400">
             <span className="w-10 text-right">{formatTime(progress)}</span>
@@ -289,7 +264,6 @@ export function Player() {
           <DevicePicker />
           <IconButton
             onClick={() => setShowUpNext((v) => !v)}
-            disabled={upNext.length === 0}
             label="Toggle up next"
             active={showUpNext}
           >
