@@ -195,7 +195,8 @@ export function FullPlayer() {
         <div className="w-10" />
       </div>
 
-      <div className="relative flex flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
+      <div className="relative flex min-h-0 flex-1 lg:mx-auto lg:w-full lg:max-w-6xl lg:gap-10 lg:px-10">
+      <div data-now-playing-content className="relative flex min-w-0 flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
         <div
           key={currentFile?.id ?? "none"}
           className={clsx(
@@ -359,9 +360,11 @@ export function FullPlayer() {
         <div className="-mt-4 flex items-center gap-6">
           <DevicePicker />
           <button
-            onClick={() => setShowQueue(true)}
+            onClick={() => setShowQueue(v => !v)}
             className="relative rounded-full p-2 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
             aria-label="Show queue"
+            aria-expanded={showQueue}
+            aria-controls="now-playing-queue"
             title="Up Next"
           >
             <ListMusic className="h-5 w-5" />
@@ -375,14 +378,19 @@ export function FullPlayer() {
 
       {/* The queue enters from the right, using the same rows and actions as the bottom player. */}
       {showQueue && (
-        <div className="absolute inset-0 z-10 flex justify-end">
+        <div
+          id="now-playing-queue"
+          role="region"
+          aria-label="Now Playing queue"
+          className="fixed inset-0 z-10 flex justify-end lg:relative lg:inset-auto lg:z-auto lg:w-80 lg:shrink-0 lg:py-6 xl:w-96"
+        >
           <button
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm lg:hidden"
             onClick={() => setShowQueue(false)}
             aria-label="Close queue"
           />
           {/* Full height, with a capped width on larger screens. */}
-          <div className="relative flex h-full w-full max-w-md flex-col animate-[slideInRight_220ms_ease-out] border-l border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="relative flex h-full w-full max-w-md flex-col animate-[slideInRight_220ms_ease-out] border-l border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] lg:border-0 lg:bg-transparent dark:border-zinc-800 dark:bg-zinc-950 lg:dark:bg-transparent">
             <div className="flex items-center justify-between px-5 pb-2 pt-4">
               <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
                 Up Next
@@ -422,6 +430,7 @@ export function FullPlayer() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

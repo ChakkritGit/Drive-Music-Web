@@ -1,7 +1,7 @@
 import { Server, routePartykitRequest, type Connection } from "partyserver";
 import { jwtVerify } from "jose";
 import type { SyncTokenPayload } from "../src/lib/sync";
-import { LEASE_MS, PARTY_PROTOCOL, positionAt, reducePlayback, validCommand, validPlayback, type PartyRoom } from "../src/lib/party";
+import { LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validPlayback, type PartyRoom } from "../src/lib/party";
 
 interface Env { PARTY_TOKEN_SECRET: string }
 type Device = { name: string; seen: number };
@@ -9,7 +9,7 @@ type Device = { name: string; seen: number };
 /** One serialized, authoritative playback room per authenticated account. */
 export class SyncServer extends Server<Env> {
   devices = new Map<string, Device>();
-  room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
+  room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, transportRevision: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
   releasing: { id: string; until: number } | null = null;
 
   async onStart() {
@@ -42,6 +42,7 @@ export class SyncServer extends Server<Env> {
     this.room.pendingOutputId = null;
     this.releasing = null;
     this.room.revision++;
+    this.room.transportRevision = this.room.revision;
     if (this.room.playback) this.room.playback = { ...this.room.playback, isPlaying: this.room.outputId ? this.room.playback.isPlaying : false, updatedAt: Date.now() };
   }
   async onMessage(connection: Connection, raw: string | ArrayBuffer | ArrayBufferView) {
@@ -74,6 +75,7 @@ export class SyncServer extends Server<Env> {
       const base = this.room.playback && this.releasing ? { ...this.room.playback, updatedAt: now } : this.room.playback;
       const playback = reducePlayback(base, m.command, now);
       if (playback === this.room.playback) return;
+      if (!base || !isQueueCommand(m.command)) this.room.transportRevision = this.room.revision + 1;
       this.room.playback = playback;
       this.room.revision++;
       await this.publish();

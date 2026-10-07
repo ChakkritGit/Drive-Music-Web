@@ -22,6 +22,8 @@ export interface PartyRoom {
   type: "room";
   protocol: typeof PARTY_PROTOCOL;
   revision: number;
+  /** Changes only for transport commands; queue/settings edits must not seek the output. */
+  transportRevision?: number;
   devices: PartyDevice[];
   outputId: string | null;
   pendingOutputId: string | null;
@@ -34,6 +36,16 @@ export type PartyCommand =
   | { type: "seek"; seconds: number }
   | { type: "insert"; file: DriveFile }
   | { type: "remove"; index: number; fileId: string };
+
+export function isQueueCommand(command: PartyCommand): boolean {
+  return ["insert", "remove", "shuffle", "loop"].includes(command.type);
+}
+
+/** Missing versions (older workers), a handoff or a missed transport command require a full apply. */
+export function canPreserveTransport(previous: Pick<PartyRoom, "outputId" | "transportRevision"> | null, next: PartyRoom): boolean {
+  return !!previous && previous.outputId === next.outputId && next.outputId !== null
+    && next.transportRevision !== undefined && previous.transportRevision === next.transportRevision;
+}
 
 export function positionAt(p: PartyPlayback, now: number): number {
   const at = p.progress + (p.isPlaying ? Math.max(0, now - p.updatedAt) / 1000 : 0);

@@ -25,3 +25,9 @@ The status worker integration is in `/Volumes/SSD256GB/WebProfile/portfolio/stat
 - Chromium smoke test against the production build and a local Wrangler worker passed: three isolated browser contexts, shared Next/Pause, Play next/removal, menu hit testing, mobile output handoff with old audio stopped, right-side queue, profile logout availability, Mix preview Play/Pause and server-side denial of Analytics. No browser page errors. Audio fixtures and authentication were simulated; real Google Drive, physical iOS/Android devices and production deployment were not exercised.
 
 The implementation checks above preceded the production release.
+
+## Queue continuity update (2026-10-07)
+
+The room now includes an optional `transportRevision`, advanced by play/pause/seek/skip and output handoffs. Queue insertion/removal, shuffle and repeat change the general revision only. The output applies those edits without seeking, restarting or reloading the current audio, and remaps any prepared transition by track identity. A queued transport command still applies if its snapshot was coalesced with a later queue edit. Older workers fall back to full reconciliation until upgraded.
+
+Desktop Now Playing inserts the queue to the right in the same content layout, with no modal backdrop. The mobile drawer is unchanged. Regression validation: 224 tests, app/worker TypeScript, production Webpack build and Chromium checks of zero active-audio seek/pause/reload events during insertion/removal, desktop non-overlap and the mobile drawer.

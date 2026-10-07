@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reducePlayback, upcoming, validCommand, validPlayback, positionAt, type PartyPlayback } from "./party";
+import { reducePlayback, canPreserveTransport, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
 import { canViewAnalytics } from "./admin";
 const files = ["a", "b", "c", "d"].map(id => ({ id, name: id, mimeType: "audio/mpeg" }));
 function state(): PartyPlayback { return reducePlayback(null, { type: "play", queue: files, index: 1 }, 1000)!; }
@@ -52,6 +52,15 @@ describe("shared playback", () => {
     expect(validPlayback(state())).toBe(true);
     for (const value of [null, {}, { type: "seek", seconds: Infinity }, { type: "play", queue: files, index: 99 }, { type: "insert", file: {} }]) expect(validCommand(value)).toBe(false);
     for (const value of [{ ...state(), currentIndex: -1 }, { ...state(), shuffleOrder: [99] }, { ...state(), isPlaying: "yes" }, { ...state(), meta: { title: {} } }]) expect(validPlayback(value)).toBe(false);
+  });
+  it("preserves audio only for queue updates on the same output and transport version", () => {
+    const room: PartyRoom = { type: "room", protocol: 2, revision: 10, transportRevision: 3,
+      outputId: "a", pendingOutputId: null, devices: [], playback: state() };
+    expect(canPreserveTransport(room, { ...room, revision: 11 })).toBe(true);
+    expect(canPreserveTransport(room, { ...room, revision: 12, transportRevision: 11 })).toBe(false);
+    expect(canPreserveTransport(room, { ...room, outputId: "b" })).toBe(false);
+    expect(canPreserveTransport(null, room)).toBe(false);
+    expect(canPreserveTransport(room, { ...room, transportRevision: undefined })).toBe(false);
   });
   it("restricts Analytics to the owner", () => {
     expect(canViewAnalytics("NongTonNee@gmail.com")).toBe(true);

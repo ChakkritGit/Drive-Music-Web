@@ -21,7 +21,7 @@ import type {
   RecentSource,
   TrackAnalysis,
 } from "@/types";
-import { positionAt, type PartyPlayback, type PartyCommand } from "@/lib/party";
+import { positionAt, upcoming, type PartyPlayback, type PartyCommand } from "@/lib/party";
 import { downloadFileFresh } from "@/lib/drive";
 import { recordPause, type PauseSource } from "@/lib/pauseLog";
 import { parseTrackMetadata } from "@/lib/metadata";
@@ -121,7 +121,7 @@ export interface PlayerContextValue {
   syncRevision: number;
   grantPartyLease: (until: number) => void;
   unlockAudio: () => void;
-  applyPartyPlayback: (playback: PartyPlayback, revision: number) => void;
+  applyPartyPlayback: (playback: PartyPlayback, revision: number, preserveTransport?: boolean) => void;
   setPartyCommandHandler: (handler: ((command: PartyCommand) => void) | null) => void;
   queue: DriveFile[];
   currentFile: DriveFile | null;
@@ -2920,7 +2920,48 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [cancelCrossfade, grantPartyLease]);
 
-  const applyPartyPlayback = useCallback((playback: PartyPlayback, revision: number) => {
+  const applyPartyPlayback = useCallback((playback: PartyPlayback, revision: number, preserveTransport = false) => {
+    const file = playback.queue[playback.currentIndex];
+    if (preserveTransport && file?.id === currentFile?.id) {
+      // Keep the active source, clock and play state untouched. Only remap the upcoming
+      // transition's index, or discard it if its target is no longer next in the edited queue.
+      if (!isPreviewingRef.current) {
+        const nextIndex = playback.loopMode === "one" ? playback.currentIndex
+          : upcoming(playback)[0] ?? (playback.loopMode === "all" ? (playback.shuffle ? playback.shuffleOrder[0] : 0) : null);
+        const nextId = nextIndex === null ? null : playback.queue[nextIndex]?.id;
+        const fading = crossfadeStateRef.current;
+        const armed = armedTransitionRef.current;
+        const gapless = gaplessArmedRef.current;
+        if ((fading && fading.targetFile.id !== nextId) || (armed && armed.targetFile.id !== nextId) || (gapless && gapless.fileId !== nextId)) {
+          cancelCrossfade();
+        } else {
+          armGenerationRef.current++;
+          if (nextIndex !== null) {
+            if (fading) fading.targetIndex = nextIndex;
+            if (armed) armed.targetIndex = nextIndex;
+            if (gapless) gapless.index = nextIndex;
+          }
+        }
+      }
+      setQueue(playback.queue);
+      setCurrentIndex(playback.currentIndex);
+      setCurrentSource(playback.source);
+      setShuffle(playback.shuffle);
+      setShuffleOrder(playback.shuffleOrder);
+      setPlayNextIndex(playback.playNextIndex);
+      setLoopMode(playback.loopMode);
+      const loading = pendingPartyRef.current;
+      if (loading) {
+        // A queue edit can arrive during download/play(). Keep the original transport intent
+        // and object identity so the asynchronous load acknowledges the newest queue revision.
+        loading.playback = { ...playback, progress: loading.playback.progress,
+          updatedAt: loading.playback.updatedAt, isPlaying: loading.playback.isPlaying };
+        loading.revision = revision;
+      } else {
+        setSyncRevision(revision);
+      }
+      return;
+    }
     cancelCrossfade();
     setError(null);
     const pending = { playback, revision };
@@ -2933,7 +2974,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setShuffleOrder(playback.shuffleOrder);
     setPlayNextIndex(playback.playNextIndex);
     setLoopMode(playback.loopMode);
-    const file = playback.queue[playback.currentIndex];
     const audio = getActiveAudio();
     if (file?.id === lastLoadedFileIdRef.current && audio?.getAttribute("src")) {
       void (async () => {
@@ -2949,7 +2989,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setSyncRevision(revision);
       })();
     }
-  }, [cancelCrossfade, getActiveAudio]);
+  }, [cancelCrossfade, getActiveAudio, currentFile?.id]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
