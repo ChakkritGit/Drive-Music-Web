@@ -1,8 +1,16 @@
 import type { DriveFile, ParsedMetadata, PlaySource } from "../types";
 
 export const PARTY_PROTOCOL = 2;
-export const LEASE_MS = 9000;
+// Leave room for minute-batched background timers and a brief network reconnect.
+// A responsive handoff still completes immediately after the old output acknowledges it.
+export const LEASE_MS = 90_000;
+export const LEGACY_LEASE_MS = 9000;
 export const HEARTBEAT_MS = 2500;
+export function leaseDeadline(sent: number, leaseMs: unknown): number {
+  const duration = typeof leaseMs === "number" && Number.isFinite(leaseMs)
+    ? Math.max(0, Math.min(leaseMs, LEASE_MS)) : LEGACY_LEASE_MS;
+  return sent + duration;
+}
 export interface PartyPlayback {
   queue: DriveFile[];
   currentIndex: number;

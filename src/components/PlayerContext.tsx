@@ -235,9 +235,8 @@ export interface PlayerContextValue {
   removeFromQueue: (index: number) => void;
   /** `source` names who asked, for the stop log; a click handler passes its event, read as "button". */
   togglePlay: (source?: unknown) => void;
-  /** Silences this device's output without touching the volume or pausing: a device following
-   * another in sync keeps playing in step, but only the other one is heard. */
-  setOutputMuted: (muted: boolean) => void;
+  /** Mutes and pauses both slots before acknowledging an output handoff. */
+  setOutputMuted: (muted: boolean, reason?: string) => void;
   next: () => void;
   prev: () => void;
   seek: (seconds: number) => void;
@@ -599,7 +598,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const audioContextRef = useRef<AudioContext | null>(null);
   /** Who last asked for a pause, and when. handlePause credits them only if the pause follows
    * within a second; otherwise a stale request would take the blame for the browser's pause. */
-  const pauseRequestRef = useRef<{ source: PauseSource; at: number } | null>(null);
+  const pauseRequestRef = useRef<{ source: PauseSource; at: number; detail?: string } | null>(null);
   const gainARef = useRef<GainNode | null>(null);
   const gainBRef = useRef<GainNode | null>(null);
   const chainARef = useRef<SlotChain | null>(null);
@@ -1475,7 +1474,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
             progressRef.current = audio.currentTime;
             setProgress(audio.currentTime);
             if (party.playback.isPlaying && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
-            else audio.pause();
+            else {
+              pauseRequestRef.current = { source: "sync", at: performance.now(), detail: "Shared playback paused" };
+              audio.pause();
+            }
             if (party.playback.isPlaying && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
             if (pendingPartyRef.current === party) { pendingPartyRef.current = null; setSyncRevision(party.revision); }
           } else if (restore) {
@@ -2893,6 +2895,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         at: Date.now(),
         position: e.currentTarget.currentTime,
         source: asked ?? "browser",
+        ...(asked && request?.detail ? { detail: request.detail } : {}),
         hidden: document.hidden,
         audio: audioContextRef.current?.state ?? "none",
       });
@@ -2905,10 +2908,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   // Revoke sound synchronously before acknowledging a handoff. Also cancel queued fades
   // and previews, which otherwise could start the inactive element after the acknowledgement.
-  const setOutputMuted = useCallback((muted: boolean) => {
+  const setOutputMuted = useCallback((muted: boolean, reason?: string) => {
     outputMutedRef.current = muted;
     if (process.env.NEXT_PUBLIC_PARTYKIT_HOST) grantPartyLease(outputLeaseUntilRef.current);
     if (muted) {
+      pauseRequestRef.current = { source: "sync", at: performance.now(), detail: reason };
       if (suspendedPlaybackRef.current) suspendedPlaybackRef.current.wasPlaying = false;
       cancelCrossfade();
       pendingPartyRef.current = null;
@@ -2981,7 +2985,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         progressRef.current = audio.currentTime;
         setProgress(audio.currentTime);
         if (playback.isPlaying && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
-        else audio.pause();
+        else {
+          pauseRequestRef.current = { source: "sync", at: performance.now(), detail: "Shared playback paused" };
+          audio.pause();
+        }
         if (pendingPartyRef.current !== pending) return;
         if (playback.isPlaying && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
         setIsPlaying(!audio.paused);

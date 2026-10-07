@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reducePlayback, canPreserveTransport, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
+import { LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
 import { canViewAnalytics } from "./admin";
 const files = ["a", "b", "c", "d"].map(id => ({ id, name: id, mimeType: "audio/mpeg" }));
 function state(): PartyPlayback { return reducePlayback(null, { type: "play", queue: files, index: 1 }, 1000)!; }
@@ -66,5 +66,12 @@ describe("shared playback", () => {
     expect(canViewAnalytics("NongTonNee@gmail.com")).toBe(true);
     expect(canViewAnalytics("other@gmail.com")).toBe(false);
     expect(canViewAnalytics(null)).toBe(false);
+  });
+  it("anchors a lease to the send time and respects older workers' short lease", () => {
+    expect(leaseDeadline(2000, LEASE_MS)).toBe(2000 + LEASE_MS);
+    expect(leaseDeadline(2000, undefined)).toBe(2000 + LEGACY_LEASE_MS);
+    expect(leaseDeadline(2000, Infinity)).toBe(2000 + LEGACY_LEASE_MS);
+    expect(leaseDeadline(2000, LEASE_MS * 10)).toBe(2000 + LEASE_MS);
+    expect(leaseDeadline(2000, 0)).toBe(2000);
   });
 });

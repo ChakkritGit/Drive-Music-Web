@@ -1,19 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  ChevronDown,
-  Heart,
-  ListMusic,
-  Music,
-  Repeat,
-  Repeat1,
-  Shuffle,
-  SkipBack,
-  SkipForward,
-  Users,
-  X,
-} from "lucide-react";
+import { ChevronDown, Heart, ListMusic, Loader2, MonitorSpeaker, Music, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
 import { PlayPauseIcon } from "@/components/PlayPauseIcon";
@@ -21,416 +9,225 @@ import { MixGlow } from "@/components/MixGlow";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { DevicePicker } from "@/components/DevicePicker";
 import { useSync } from "@/components/SyncContext";
-import { getAverageColor } from "@/lib/color";
 import { TrackRow } from "@/components/TrackRow";
 import { TransitionChip } from "@/components/TransitionChip";
 import { analysisSummary } from "@/lib/analysis";
 
-const FALLBACK_GLOW = "rgb(120, 120, 120)";
-
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  return `${Math.floor(sec / 60)}:${Math.floor(sec % 60).toString().padStart(2, "0")}`;
 }
 
 export function FullPlayer() {
   const {
-    queue,
-    currentFile,
-    currentMeta,
-    cachedTracks,
-    isPlaying,
-    isLoading,
-    error,
-    progress,
-    duration,
-    shuffle,
-    loopMode,
-    isExpanded,
-    currentSource,
-    upNext,
-    togglePlay,
-    next,
-    prev,
-    seek,
-    toggleShuffle,
-    cycleLoopMode,
-    collapse,
-    removeFromQueue,
-    visualizerEnabled,
-    getAudioLevel,
-    crossfadeEnabled,
-    autoMixEnabled,
-    analyses,
+    queue, currentFile, currentMeta, cachedTracks, isPlaying, isLoading, error,
+    progress, duration, volume, shuffle, loopMode, isExpanded, currentSource, upNext,
+    togglePlay, next, prev, seek, changeVolume, toggleShuffle, cycleLoopMode, collapse,
+    removeFromQueue, visualizerEnabled, getAudioLevel, crossfadeEnabled, autoMixEnabled, analyses,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
-  const { outputName, outputId, deviceId } = useSync();
-
-  const mixSummary = currentFile ? analysisSummary(analyses.get(currentFile.id)) : "";
-  // Whether the mix engine is set up for this track — both switches on, and something loaded.
-  // Crossfade is checked as well as auto mix because auto mix alone does nothing: it shapes a
-  // crossfade rather than being a transition of its own.
-  //
-  // Deliberately *not* gated on isPlaying, unlike the glow's own `active`: the glow has to stay
-  // mounted across a pause so it can animate itself away. It is gated on isExpanded, though —
-  // this view stays mounted when collapsed (see wasExpanded below), and an invisible animation
-  // driving requestAnimationFrame forever is pure battery.
-  const isMixReady = crossfadeEnabled && autoMixEnabled && currentFile !== null;
-
-  const [glowColor, setGlowColor] = useState(FALLBACK_GLOW);
+  const { outputName, outputId, deviceId, pendingOutputId, connected, syncAvailable } = useSync();
   const [showQueue, setShowQueue] = useState(false);
-  const glowRef = useRef<HTMLDivElement | null>(null);
-
-  // Collapsing the player leaves this component mounted, so the sheet's state survives —
-  // reopening Now Playing would come back with the queue already covering it. Adjusted during
-  // render on the transition (React's recommended alternative to a setState-in-effect) rather
-  // than only in the collapse button's handler, which isn't the only way out of this view.
   const [wasExpanded, setWasExpanded] = useState(isExpanded);
+  const artworkGlow = useRef<HTMLDivElement>(null);
+  const queueButton = useRef<HTMLButtonElement>(null);
+  const mixSummary = currentFile ? analysisSummary(analyses.get(currentFile.id)) : "";
+  const isMixReady = crossfadeEnabled && autoMixEnabled && currentFile !== null;
+  const title = currentMeta?.title || currentFile?.name.replace(/\.[^./]+$/, "") || "No track playing";
+  const favorited = currentFile ? isFavorite(currentFile.id) : false;
+
   if (wasExpanded !== isExpanded) {
     setWasExpanded(isExpanded);
     if (!isExpanded) setShowQueue(false);
   }
 
   useEffect(() => {
-    let cancelled = false;
-    if (!currentMeta?.pictureDataUrl) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reset glow when there's no artwork
-      setGlowColor(FALLBACK_GLOW);
-      return;
-    }
-    getAverageColor(currentMeta.pictureDataUrl).then((color) => {
-      if (!cancelled) setGlowColor(color);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentMeta?.pictureDataUrl]);
-
-  // Drives the ambient glow from the actual audio (via the shared analyser — see
-  // getAudioLevel in PlayerContext) instead of the fixed-timer `breathe` CSS animation, while
-  // this view is open and the setting's on. Sets style directly on the ref rather than through
-  // React state, the same reasoning as everywhere else something needs to update every
-  // animation frame: state at that rate would mean a render every frame for no benefit.
-  useEffect(() => {
-    const el = glowRef.current;
-    if (!el || !isExpanded || !visualizerEnabled) return;
-    // Hand control over from the CSS keyframe animation to this loop's own inline style, and
-    // back again on cleanup — an inline style always wins over a class-based animation for the
-    // same property, so leaving one set would otherwise freeze the CSS animation permanently.
-    el.style.animation = "none";
-    let smoothedLevel = 0;
-    let rafId: number;
-    const tick = () => {
-      const level = getAudioLevel();
-      smoothedLevel += (level - smoothedLevel) * 0.15;
-      el.style.transform = `scale(${1 + smoothedLevel * 0.18})`;
-      el.style.opacity = String(0.35 + smoothedLevel * 0.4);
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(rafId);
-      el.style.animation = "";
-      el.style.transform = "";
-      el.style.opacity = "";
-    };
-  }, [isExpanded, visualizerEnabled, getAudioLevel]);
-
-  // Lock the page behind this overlay from scrolling while it's open — otherwise the main
-  // page's own scroll region is still active underneath this one, producing two competing
-  // scrollbars/scroll gestures at once.
-  useEffect(() => {
     if (!isExpanded) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
+    return () => { document.body.style.overflow = previousOverflow; };
   }, [isExpanded]);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // Menus and the mix editor own Escape while they are open.
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      if (showQueue) { setShowQueue(false); queueButton.current?.focus(); }
+      else collapse();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isExpanded, showQueue, collapse]);
+
+  // A restrained accent halo around the artwork, using the same audio analyser as before.
+  useEffect(() => {
+    const el = artworkGlow.current;
+    if (!el || !isExpanded || !visualizerEnabled || !isPlaying
+      || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let frame: number;
+    let level = 0;
+    const tick = () => {
+      level += (getAudioLevel() - level) * 0.12;
+      el.style.opacity = String(0.12 + level * 0.18);
+      el.style.transform = `scale(${1 + level * 0.08})`;
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(frame); el.style.opacity = ""; el.style.transform = ""; };
+  }, [isExpanded, visualizerEnabled, isPlaying, getAudioLevel]);
 
   return (
     <div
       aria-hidden={!isExpanded}
       inert={!isExpanded}
       className={clsx(
-        "fixed inset-0 z-50 flex flex-col overflow-hidden bg-white transition-all duration-300 ease-out dark:bg-black",
-        isExpanded
-          ? "translate-y-0 opacity-100"
-          : "pointer-events-none translate-y-6 opacity-0",
+        "fixed inset-0 z-50 flex flex-col overflow-hidden bg-background text-foreground transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+        isExpanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-4 opacity-0",
       )}
     >
-      {/* The ambient backdrop is the cover art itself, blown up and blurred into a soft wash
-          of the track's own colours, rather than the flat average-colour fill it used to be.
-          The average colour stays underneath as the fill for tracks with no artwork (and while
-          one is decoding). Inset well past the 100px blur radius on every side: unlike a flat
-          fill, a blurred *image* fades toward transparent at its own edges, which would show
-          as a vignette around the viewport if the layer stopped any closer in. */}
-      <div
-        ref={glowRef}
-        className="pointer-events-none absolute -inset-40 animate-[breathe_30s_ease-in-out_infinite] bg-cover bg-center opacity-80 blur-[100px]"
-        style={{
-          backgroundColor: glowColor,
-          backgroundImage: currentMeta?.pictureDataUrl
-            ? `url(${currentMeta.pictureDataUrl})`
-            : undefined,
-          transition: "background-color 700ms ease-out",
-        }}
-      />
-
-      <div className="relative flex items-center justify-between px-6 py-4">
-        <button
-          onClick={collapse}
-          className="grid h-10 w-10 place-items-center rounded-full text-zinc-500 transition hover:bg-zinc-950/5 active:scale-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none dark:text-zinc-400 dark:hover:bg-white/10"
-          aria-label="Collapse player"
-        >
-          <ChevronDown className="h-5 w-5" />
+      <header className="mx-auto flex w-full max-w-[1480px] shrink-0 items-center justify-between gap-4 px-5 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-8 lg:px-12 lg:py-7">
+        <div className="flex min-w-0 items-center gap-3">
+          <button onClick={collapse} aria-label="Collapse player"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-zinc-200 text-zinc-500 transition hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900">
+            <ChevronDown className="h-5 w-5" />
+          </button>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold tracking-tight">Now Playing</p>
+            <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{currentSource?.name || "Your music"}</p>
+          </div>
+        </div>
+        <button ref={queueButton} onClick={() => setShowQueue(v => !v)} aria-label="Show queue"
+          aria-expanded={showQueue} aria-controls="now-playing-queue"
+          className={clsx("flex h-10 shrink-0 items-center gap-2 rounded-full border px-3 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:px-4",
+            showQueue ? "border-accent/25 bg-accent/10 text-accent-strong" : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900")}>
+          <ListMusic className="h-4 w-4" />
+          <span className="hidden sm:inline">Queue</span>
+          {upNext.length > 0 && <span className="text-xs tabular-nums">{upNext.length}</span>}
         </button>
-        <p className="text-xs font-semibold tracking-wider text-zinc-500 uppercase dark:text-zinc-400">
-          Now Playing
-        </p>
-        {/* Balances the collapse button on the left so "Now Playing" stays centred — the
-            actions that used to sit here now live under the transport controls. */}
-        <div className="w-10" />
-      </div>
+      </header>
 
-      <div className="relative flex min-h-0 flex-1 lg:mx-auto lg:w-full lg:max-w-6xl lg:gap-10 lg:px-10">
-      <div data-now-playing-content className="relative flex min-w-0 flex-1 flex-col items-center gap-8 overflow-y-auto px-6 py-6">
-        <div
-          key={currentFile?.id ?? "none"}
-          className={clsx(
-            // Crisp, fully-opaque artwork with a real drop shadow — it used to have its edges
-            // feathered into transparency to melt into the backdrop, which softened the
-            // artwork itself. The blurred backdrop above now provides that halo instead.
-            "flex h-64 w-64 shrink-0 animate-[fadeIn_500ms_ease-out] items-center justify-center overflow-hidden rounded-2xl shadow-2xl shadow-black/30 sm:h-80 sm:w-80",
-            !currentMeta?.pictureDataUrl && "bg-zinc-100 dark:bg-zinc-800",
-          )}
-        >
-          {currentMeta?.pictureDataUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={currentMeta.pictureDataUrl}
-              alt=""
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <Music className="h-16 w-16 text-zinc-400" />
-          )}
-        </div>
-
-        <div className="flex w-full max-w-sm items-center justify-between gap-3">
-          {/* Left-aligned: centring the title made it drift as the text length changed, and it
-              read as unrelated to the favorite button sharing the row. */}
-          <div className="min-w-0 flex-1 text-left">
-            <p className="truncate text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-              {currentFile
-                ? currentMeta?.title || currentFile.name
-                : "No track playing"}
-            </p>
-            <p className="mt-1 truncate text-sm text-zinc-600 dark:text-zinc-400">
-              {error ? (
-                <span className="text-red-500">{error}</span>
+      <div className="now-playing-layout mx-auto min-h-0 w-full max-w-[1480px] flex-1 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-8 lg:px-12 lg:pb-10" data-queue-open={showQueue}>
+        <div data-now-playing-content className="now-playing-content min-h-0 min-w-0 overflow-y-auto overscroll-contain">
+          <div className="relative mx-auto w-full max-w-[min(76vw,22rem)] shrink-0 lg:max-w-[min(32vh,18rem)] xl:max-w-[28rem]">
+            <div ref={artworkGlow} aria-hidden="true" className="pointer-events-none absolute inset-6 rounded-full bg-accent opacity-[0.12] blur-3xl" />
+            <div key={currentFile?.id ?? "none"} className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-3xl border border-zinc-950/5 bg-zinc-100 shadow-[0_20px_70px_-25px_rgba(0,0,0,0.28)] dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/40">
+              {currentMeta?.pictureDataUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={currentMeta.pictureDataUrl} alt={`Cover art for ${title}`} className="h-full w-full object-cover" />
               ) : (
-                [currentMeta?.artist, currentMeta?.album]
-                  .filter(Boolean)
-                  .join(" · ") || " "
+                <div className="flex flex-col items-center gap-4 text-zinc-300 dark:text-zinc-700">
+                  <Music className="h-20 w-20 stroke-[1]" />
+                  <span className="text-[10px] font-medium uppercase tracking-[0.3em]">Drive Music</span>
+                </div>
               )}
-            </p>
-            {currentSource && (
-              <p className="mt-0.5 truncate text-xs text-zinc-500">
-                Playing from {currentSource.name}
-              </p>
-            )}
-            {/* The two numbers that decide what the mix out of this track can do. Only shown
-                when mixing is on, which is the only time they mean anything. */}
-            {currentFile && crossfadeEnabled && autoMixEnabled && mixSummary && (
-              <p className="mt-0.5 truncate text-xs tabular-nums text-zinc-400">{mixSummary}</p>
-            )}
-            {outputName && (
-              <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-accent-strong">
-                <Users className="h-3 w-3" />
-                {outputId === deviceId ? "Sound on this device" : `Sound on ${outputName}`}
-              </p>
-            )}
-          </div>
-          {currentFile && (
-            <button
-              onClick={() => toggleFavorite(currentFile)}
-              className={clsx(
-                "shrink-0 rounded-full p-2 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-                isFavorite(currentFile.id) ? "text-red-500" : "text-zinc-400",
-              )}
-              aria-label={
-                isFavorite(currentFile.id)
-                  ? "Remove from favorites"
-                  : "Add to favorites"
-              }
-            >
-              <Heart
-                className={clsx(
-                  "h-5 w-5",
-                  isFavorite(currentFile.id) && "fill-current",
-                )}
-              />
-            </button>
-          )}
-        </div>
-
-        <div className="w-full max-w-sm">
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={0.1}
-            value={Math.min(progress, duration || 0)}
-            onChange={(e) => seek(Number(e.target.value))}
-            className="seek w-full"
-            style={{ "--pct": `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` } as React.CSSProperties}
-            aria-label="Seek"
-          />
-          <div className="mt-1 flex justify-between text-xs text-zinc-500 dark:text-zinc-400">
-            <span className="tabular-nums">{formatTime(progress)}</span>
-            <span className="tabular-nums">{formatTime(duration)}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <button
-            onClick={toggleShuffle}
-            className={clsx(
-              "rounded-full p-2 transition active:scale-90",
-              shuffle
-                ? "text-accent-strong"
-                : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-            )}
-            aria-label="Toggle shuffle"
-          >
-            <Shuffle className="h-4 w-4" />
-          </button>
-          <button
-            onClick={prev}
-            disabled={!currentFile}
-            aria-label="Previous"
-            className="grid h-11 w-11 place-items-center rounded-full text-zinc-700 transition hover:bg-zinc-950/5 active:scale-90 disabled:opacity-30 disabled:active:scale-100 dark:text-zinc-200 dark:hover:bg-white/10"
-          >
-            <SkipBack className="h-5 w-5" />
-          </button>
-          {/* Extra room either side: the glow reaches half a button-width past the edge, and
-              without it the strands run into the skip buttons on a narrow screen. */}
-          <span className="relative mx-2 inline-flex">
-            {isMixReady && isExpanded && <MixGlow active={isPlaying} />}
-            <button
-              onClick={togglePlay}
-              disabled={!currentFile || isLoading}
-              className="relative z-10 grid h-16 w-16 place-items-center rounded-full bg-zinc-950 text-white shadow-lg transition hover:scale-105 active:scale-95 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-30 disabled:hover:scale-100 dark:bg-white dark:text-zinc-950"
-              aria-label={isPlaying ? "Pause" : "Play"}
-            >
-              <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />
-            </button>
-          </span>
-          <button
-            onClick={next}
-            disabled={!currentFile}
-            aria-label="Next"
-            className="grid h-11 w-11 place-items-center rounded-full text-zinc-700 transition hover:bg-zinc-950/5 active:scale-90 disabled:opacity-30 disabled:active:scale-100 dark:text-zinc-200 dark:hover:bg-white/10"
-          >
-            <SkipForward className="h-5 w-5" />
-          </button>
-          <button
-            onClick={cycleLoopMode}
-            className={clsx(
-              "rounded-full p-2 transition active:scale-90",
-              loopMode !== "off"
-                ? "text-accent-strong"
-                : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900",
-            )}
-            aria-label="Cycle repeat mode"
-          >
-            {loopMode === "one" ? (
-              <Repeat1 className="h-4 w-4" />
-            ) : (
-              <Repeat className="h-4 w-4" />
-            )}
-          </button>
-        </div>
-
-        {/* Secondary actions, one step down from the transport row: same visual weight as each
-            other, clearly below play/pause rather than tucked up in the header. */}
-        <div className="-mt-4 flex items-center gap-6">
-          <DevicePicker />
-          <button
-            onClick={() => setShowQueue(v => !v)}
-            className="relative rounded-full p-2 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-            aria-label="Show queue"
-            aria-expanded={showQueue}
-            aria-controls="now-playing-queue"
-            title="Up Next"
-          >
-            <ListMusic className="h-5 w-5" />
-            {upNext.length > 0 && (
-              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
-            )}
-          </button>
-        </div>
-
-      </div>
-
-      {/* The queue enters from the right, using the same rows and actions as the bottom player. */}
-      {showQueue && (
-        <div
-          id="now-playing-queue"
-          role="region"
-          aria-label="Now Playing queue"
-          className="fixed inset-0 z-10 flex justify-end lg:relative lg:inset-auto lg:z-auto lg:w-80 lg:shrink-0 lg:py-6 xl:w-96"
-        >
-          <button
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm lg:hidden"
-            onClick={() => setShowQueue(false)}
-            aria-label="Close queue"
-          />
-          {/* Full height, with a capped width on larger screens. */}
-          <div className="relative flex h-full w-full max-w-md flex-col animate-[slideInRight_220ms_ease-out] border-l border-zinc-200 bg-white pb-[env(safe-area-inset-bottom)] lg:border-0 lg:bg-transparent dark:border-zinc-800 dark:bg-zinc-950 lg:dark:bg-transparent">
-            <div className="flex items-center justify-between px-5 pb-2 pt-4">
-              <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">
-                Up Next
-              </p>
-              <button
-                onClick={() => setShowQueue(false)}
-                className="rounded-full p-1.5 text-zinc-400 transition active:scale-90 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                aria-label="Close queue"
-              >
-                <X className="h-4 w-4" />
-              </button>
             </div>
-            {currentFile && upNext.length > 0 && (
-              <div className="px-5 pb-1">
-                <TransitionChip from={currentFile} to={upNext[0].file} />
+          </div>
+
+          <div className="mx-auto flex w-full min-w-0 max-w-[25rem] flex-col py-1 lg:py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="mb-3 hidden items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-400 xl:flex">
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+                  {isLoading ? "Loading track" : isPlaying ? "Now Playing" : "Paused"}
+                </p>
+                <h1 className="text-balance break-words text-2xl font-semibold leading-tight tracking-tight sm:text-3xl xl:text-4xl">{title}</h1>
+                <p className="mt-2 truncate text-sm text-zinc-500 sm:text-base dark:text-zinc-400">{currentMeta?.artist || "Unknown artist"}</p>
+                {currentMeta?.album && <p className="mt-1 truncate text-xs text-zinc-400 dark:text-zinc-500">{currentMeta.album}</p>}
               </div>
-            )}
-            {upNext.length === 0 ? (
-              <p className="px-5 pb-6 text-sm text-zinc-400">Nothing queued after this track.</p>
-            ) : (
-              <ul className="min-h-0 flex-1 divide-y divide-zinc-100 overflow-y-auto px-5 pb-4 dark:divide-zinc-900">
-                {upNext.map(({ file, index }, position) => (
-                  <TrackRow
-                    key={`${file.id}-${index}`}
-                    file={file}
-                    queue={queue}
-                    index={index}
-                    source={currentSource ?? undefined}
-                    cachedTrack={cachedTracks.get(file.id)}
-                    nextFile={upNext[position + 1]?.file}
-                    onRemove={() => removeFromQueue(index)}
-                    removeLabel="Remove from queue"
-                  />
-                ))}
+              {currentFile && <button onClick={() => toggleFavorite(currentFile)} aria-label={favorited ? "Remove from favorites" : "Add to favorites"}
+                aria-pressed={favorited} className={clsx("mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-full border transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:mt-7",
+                  favorited ? "border-accent/20 bg-accent/10 text-accent-strong" : "border-zinc-200 text-zinc-400 hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900")}>
+                <Heart className={clsx("h-[18px] w-[18px]", favorited && "fill-current")} />
+              </button>}
+            </div>
+
+            {error && <p role="status" className="mt-3 text-xs text-red-500">{error}</p>}
+            <div className="mt-7 sm:mt-9">
+              <input type="range" min={0} max={duration || 0} step={0.1} value={Math.min(progress, duration || 0)}
+                onChange={e => seek(Number(e.target.value))} className="seek w-full" aria-label="Seek"
+                style={{ "--pct": `${duration ? Math.min(100, progress / duration * 100) : 0}%` } as React.CSSProperties} />
+              <div className="mt-1 flex justify-between text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
+                <span>{formatTime(progress)}</span><span>{formatTime(duration)}</span>
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-between gap-2 sm:mt-6">
+              <TransportButton onClick={toggleShuffle} label="Toggle shuffle" active={shuffle}><Shuffle className="h-[18px] w-[18px]" /></TransportButton>
+              <TransportButton onClick={prev} label="Previous" disabled={!currentFile}><SkipBack className="h-6 w-6 fill-current" /></TransportButton>
+              <span className="relative mx-3 inline-flex">
+                {isMixReady && isExpanded && <MixGlow active={isPlaying} />}
+                <button onClick={togglePlay} disabled={!currentFile || isLoading} aria-label={isPlaying ? "Pause" : "Play"}
+                  className="relative z-10 grid h-16 w-16 place-items-center rounded-full bg-accent text-zinc-950 shadow-lg shadow-accent/15 transition hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-4 focus-visible:ring-offset-background disabled:opacity-40 disabled:hover:scale-100">
+                  {isLoading ? <Loader2 className="h-6 w-6 animate-spin" /> : <PlayPauseIcon playing={isPlaying} className="h-6 w-6" />}
+                </button>
+              </span>
+              <TransportButton onClick={next} label="Next" disabled={!currentFile}><SkipForward className="h-6 w-6 fill-current" /></TransportButton>
+              <TransportButton onClick={cycleLoopMode} label="Cycle repeat mode" active={loopMode !== "off"}>
+                {loopMode === "one" ? <Repeat1 className="h-[18px] w-[18px]" /> : <Repeat className="h-[18px] w-[18px]" />}
+              </TransportButton>
+            </div>
+
+            <div className="mt-7 flex items-center justify-between gap-4 border-t border-zinc-200/80 pt-5 dark:border-zinc-800">
+              <div className="flex min-w-0 items-center gap-2">
+                <DevicePicker />
+                <div className="min-w-0 text-xs">
+                  <p className="truncate text-zinc-600 dark:text-zinc-300">{pendingOutputId ? "Switching output…" : syncAvailable && !connected ? "Reconnecting…" : outputName ? outputId === deviceId ? "This device" : outputName : "Audio output"}</p>
+                  {outputName && <p className="mt-0.5 text-[10px] text-zinc-400">{outputId === deviceId ? "Playing here" : "Control from here"}</p>}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Volume2 className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                <input type="range" min={0} max={1} step={0.01} value={volume} onChange={e => changeVolume(Number(e.target.value))}
+                  className="seek w-20 sm:w-24" aria-label="Volume" style={{ "--pct": `${volume * 100}%` } as React.CSSProperties} />
+              </div>
+            </div>
+            {isMixReady && mixSummary && <p className="mt-4 text-[10px] tabular-nums text-zinc-400">{mixSummary}</p>}
+          </div>
+        </div>
+
+        <div id="now-playing-queue" role="region" aria-label="Now Playing queue" aria-hidden={!showQueue} inert={!showQueue}
+          className="now-playing-queue-shell" data-open={showQueue}>
+          <button className="absolute inset-0 bg-black/30 backdrop-blur-sm lg:hidden" onClick={() => setShowQueue(false)} aria-label="Dismiss queue" />
+          <div className="now-playing-queue relative flex h-full min-h-0 flex-col overflow-hidden rounded-l-3xl border border-zinc-200 bg-zinc-50 pb-[env(safe-area-inset-bottom)] dark:border-zinc-800 dark:bg-zinc-900/60 lg:rounded-3xl lg:pb-0">
+            <div className="flex shrink-0 items-center justify-between gap-3 px-5 pb-4 pt-5">
+              <div><h2 className="text-base font-semibold tracking-tight">Up Next</h2><p className="mt-1 text-xs text-zinc-400">{upNext.length} {upNext.length === 1 ? "track" : "tracks"} in queue</p></div>
+              <button onClick={() => { setShowQueue(false); queueButton.current?.focus(); }} aria-label="Close queue"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-zinc-400 transition hover:bg-zinc-200/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            {currentFile && <div className="mx-4 mb-3 flex shrink-0 items-center gap-3 rounded-2xl border border-zinc-200/70 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/70">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-100 text-zinc-400 dark:bg-zinc-800">
+                {currentMeta?.pictureDataUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={currentMeta.pictureDataUrl} alt="" className="h-full w-full object-cover" />
+                ) : <Music className="h-5 w-5" />}
+              </div>
+              <div className="min-w-0"><p className="mb-1 text-[10px] font-medium text-accent-strong">{isPlaying ? "Playing now" : "Paused"}</p><p className="truncate text-xs font-medium">{title}</p><p className="mt-0.5 truncate text-[11px] text-zinc-400">{currentMeta?.artist || "Unknown artist"}</p></div>
+            </div>}
+            {currentFile && upNext.length > 0 && <div className="px-5 pb-2"><TransitionChip from={currentFile} to={upNext[0].file} /></div>}
+            {upNext.length === 0 ? <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 pb-16 text-center text-zinc-400"><ListMusic className="h-8 w-8 stroke-[1.25]" /><p className="text-sm">You’re all caught up</p><p className="max-w-48 text-xs leading-relaxed">Add a track to keep the music going.</p></div> : (
+              <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-4">
+                {upNext.map(({ file, index }, position) => <TrackRow key={`${file.id}-${index}`} file={file} queue={queue} index={index}
+                  source={currentSource ?? undefined} cachedTrack={cachedTracks.get(file.id)} nextFile={upNext[position + 1]?.file}
+                  onRemove={() => removeFromQueue(index)} removeLabel="Remove from queue" />)}
               </ul>
             )}
+            <div className="flex shrink-0 items-center gap-2 border-t border-zinc-200 px-4 py-3 text-xs text-zinc-400 dark:border-zinc-800">
+              {syncAvailable ? <DevicePicker /> : <MonitorSpeaker className="h-4 w-4" />}
+              <span className="truncate">{outputName || "Choose where to listen"}</span>
+            </div>
           </div>
         </div>
-      )}
       </div>
     </div>
   );
+}
+
+function TransportButton({ onClick, label, active = false, disabled = false, children }: {
+  onClick: () => void; label: string; active?: boolean; disabled?: boolean; children: React.ReactNode;
+}) {
+  return <button onClick={onClick} aria-label={label} aria-pressed={active || undefined} disabled={disabled}
+    className={clsx("grid h-10 w-10 shrink-0 place-items-center rounded-full transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-30",
+      active ? "bg-accent/10 text-accent-strong" : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900")}>{children}</button>;
 }

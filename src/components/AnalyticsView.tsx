@@ -965,7 +965,7 @@ const PAUSE_SOURCE_LABEL: Record<PauseEntry["source"], string> = {
   button: "Play/pause button",
   space: "Space bar",
   "track-row": "Tapped the playing track",
-  sync: "Listen together (another device)",
+  sync: "Party Play output / shared controls",
   "media-session": "Media controls",
   browser: "Browser / system",
   error: "Playback error",

@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import usePartySocket from "partysocket/react";
 import { SharedPlayerProvider, usePlayer, type PlayerContextValue } from "@/components/PlayerContext";
 import { useToast } from "@/components/ToastContext";
-import { HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, canPreserveTransport, positionAt, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
+import { HEARTBEAT_MS, PARTY_PROTOCOL, canPreserveTransport, leaseDeadline, positionAt, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
 
 interface SyncContextValue {
   devices: PartyRoom["devices"];
@@ -59,10 +59,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const applied = useRef<{ key: string; outputId: string | null; transportRevision?: number } | null>(null);
   const leaseUntil = useRef(0);
   useEffect(() => { playerRef.current = player; });
-  const silence = useCallback(() => {
+  const silence = useCallback((reason = "Output changed or session ended") => {
     leaseUntil.current = 0;
     if (leaseTimer.current) clearTimeout(leaseTimer.current);
-    playerRef.current.setOutputMuted(true);
+    playerRef.current.setOutputMuted(true, reason);
     applied.current = null;
     setLease(0);
   }, []);
@@ -85,11 +85,13 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     enabled: available && status === "authenticated" && !!roomId,
     query: async () => ({ token: (await fetchToken())?.token ?? "" }),
     onOpen(event) {
-      // Connection ids are allocated per socket (not localStorage), so two tabs are separate outputs.
+      // IDs belong to this PartySocket instance: separate tabs, stable across reconnects.
       (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, name: deviceName() }));
     },
-    onClose() { setConnected(false); silence(); },
-    onError() { setConnected(false); silence(); },
+    // Cached playback keeps its existing lease through brief connection failures. The
+    // audio-thread cutoff still bounds it if reconnection fails or another output takes over.
+    onClose() { setConnected(false); },
+    onError() { setConnected(false); },
     // This callback runs on websocket events, never during render.
     /* eslint-disable react-hooks/purity */
     onMessage(event) {
@@ -98,6 +100,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       try { m = JSON.parse(event.data); } catch { return; }
       if (m.type === "welcome") {
         idRef.current = m.deviceId; setDeviceId(m.deviceId); setConnected(true);
+        socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
+      } else if (m.type === "heartbeat-request") {
         socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
       } else if (m.type === "room" && m.protocol === PARTY_PROTOCOL) {
         if (m.playback && typeof m.serverTime === "number") {
@@ -110,12 +114,15 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         } else if (leaseUntil.current <= performance.now()) {
           socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
         }
-      } else if (m.type === "lease" && m.granted && roomRef.current?.outputId === idRef.current && m.revision === roomRef.current.revision) {
-        const until = m.sent + LEASE_MS;
+      } else if (m.type === "lease" && m.granted && typeof m.sent === "number" && Number.isFinite(m.sent)
+        && roomRef.current?.outputId === idRef.current) {
+        const until = leaseDeadline(m.sent, m.leaseMs);
         if (until <= performance.now() || until < leaseUntil.current) return;
         leaseUntil.current = until;
         if (leaseTimer.current) clearTimeout(leaseTimer.current);
-        leaseTimer.current = setTimeout(silence, until - performance.now());
+        leaseTimer.current = setTimeout(() => {
+          if (leaseUntil.current <= performance.now()) silence("Party Play connection could not renew the output lease");
+        }, until - performance.now());
         playerRef.current.grantPartyLease(until);
         setLease(until);
       }
@@ -123,12 +130,18 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     /* eslint-enable react-hooks/purity */
   });
   useEffect(() => {
-    if (!connected) return;
+    if (!available || status !== "authenticated" || !roomId) return;
     const timer = setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
     }, HEARTBEAT_MS);
-    return () => clearInterval(timer);
-  }, [socket, connected]);
+    const renew = () => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
+      else if (socket.readyState === WebSocket.CLOSED) socket.reconnect();
+    };
+    document.addEventListener("visibilitychange", renew);
+    window.addEventListener("online", renew);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", renew); window.removeEventListener("online", renew); };
+  }, [socket, available, status, roomId]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => { clearInterval(timer); if (leaseTimer.current) clearTimeout(leaseTimer.current); };
