@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import usePartySocket from "partysocket/react";
 import { SharedPlayerProvider, usePlayer, type PlayerContextValue } from "@/components/PlayerContext";
 import { useToast } from "@/components/ToastContext";
-import { HEARTBEAT_MS, PARTY_PROTOCOL, canPreserveTransport, leaseDeadline, positionAt, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
+import { HEARTBEAT_MS, PARTY_PROTOCOL, canPreserveTransport, leaseDeadline, playbackDisplay, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
 
 interface SyncContextValue {
   devices: PartyRoom["devices"];
@@ -62,6 +62,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const silence = useCallback((reason = "Output changed or session ended") => {
     leaseUntil.current = 0;
     if (leaseTimer.current) clearTimeout(leaseTimer.current);
+    playerRef.current.grantPartyLease(0);
     playerRef.current.setOutputMuted(true, reason);
     applied.current = null;
     setLease(0);
@@ -88,10 +89,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       // IDs belong to this PartySocket instance: separate tabs, stable across reconnects.
       (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, name: deviceName() }));
     },
-    // Cached playback keeps its existing lease through brief connection failures. The
-    // audio-thread cutoff still bounds it if reconnection fails or another output takes over.
-    onClose() { setConnected(false); },
-    onError() { setConnected(false); },
+    onClose() { setConnected(false); silence("Party Play connection closed"); },
+    onError() { setConnected(false); silence("Party Play connection failed"); },
     // This callback runs on websocket events, never during render.
     /* eslint-disable react-hooks/purity */
     onMessage(event) {
@@ -129,6 +128,24 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     },
     /* eslint-enable react-hooks/purity */
   });
+  useEffect(() => {
+    if (!available) return;
+    const leave = () => {
+      // pagehide also covers reloads and the back/forward cache. Stop audio before
+      // closing so the server can release this page's output immediately.
+      silence("Page closed or refreshed");
+      socket.close(1000, "Page closed or refreshed");
+    };
+    const restore = (event: PageTransitionEvent) => {
+      if (event.persisted) socket.reconnect();
+    };
+    window.addEventListener("pagehide", leave);
+    window.addEventListener("pageshow", restore);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      window.removeEventListener("pageshow", restore);
+    };
+  }, [available, silence, socket]);
   useEffect(() => {
     if (!available || status !== "authenticated" || !roomId) return;
     const timer = setInterval(() => {
@@ -197,11 +214,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     return { ...player,
       ...(p ? { queue: p.queue, currentIndex: p.currentIndex, currentFile,
         currentSource: p.source, currentMeta: (currentFile && player.cachedTracks.get(currentFile.id)?.parsedMeta) || p.meta,
-        isPlaying: preview ? player.isPlaying : p.isPlaying,
+        ...playbackDisplay(room, player, localOutput, now || p.updatedAt),
         isLoading: localOutput && player.isLoading,
         error: localOutput ? player.error : null,
-        progress: room.outputId && !room.pendingOutputId ? positionAt(p, now || p.updatedAt) : p.progress,
-        duration: p.duration, shuffle: p.shuffle, shuffleOrder: p.shuffleOrder, loopMode: p.loopMode,
+        shuffle: p.shuffle, shuffleOrder: p.shuffleOrder, loopMode: p.loopMode,
         playNextIndex: p.playNextIndex, upNext: upcoming(p).map(index => ({ file: p.queue[index], index })),
       } : {}),
       play: (queue, index, source) => command({ type: "play", queue, index, source }),

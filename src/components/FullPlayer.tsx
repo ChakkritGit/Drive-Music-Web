@@ -24,6 +24,7 @@ export function FullPlayer() {
     progress, duration, volume, shuffle, loopMode, isExpanded, currentSource, upNext,
     togglePlay, next, prev, seek, changeVolume, toggleShuffle, cycleLoopMode, collapse,
     removeFromQueue, visualizerEnabled, getAudioLevel, crossfadeEnabled, autoMixEnabled, analyses,
+    isPreviewingTransition,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
   const { outputName, outputId, deviceId, pendingOutputId, connected, syncAvailable } = useSync();
@@ -130,7 +131,7 @@ export function FullPlayer() {
               <div className="min-w-0">
                 <p className="mb-3 hidden items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-400 xl:flex">
                   <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                  {isLoading ? "Loading track" : isPlaying ? "Now Playing" : "Paused"}
+                  {isPreviewingTransition ? "Paused for preview" : isLoading ? "Loading track" : isPlaying ? "Now Playing" : "Paused"}
                 </p>
                 <h1 className="text-balance break-words text-2xl font-semibold leading-tight tracking-tight sm:text-3xl xl:text-4xl">{title}</h1>
                 <p className="mt-2 truncate text-sm text-zinc-500 sm:text-base dark:text-zinc-400">{currentMeta?.artist || "Unknown artist"}</p>
@@ -203,7 +204,7 @@ export function FullPlayer() {
                   <img src={currentMeta.pictureDataUrl} alt="" className="h-full w-full object-cover" />
                 ) : <Music className="h-5 w-5" />}
               </div>
-              <div className="min-w-0"><p className="mb-1 text-[10px] font-medium text-accent-strong">{isPlaying ? "Playing now" : "Paused"}</p><p className="truncate text-xs font-medium">{title}</p><p className="mt-0.5 truncate text-[11px] text-zinc-400">{currentMeta?.artist || "Unknown artist"}</p></div>
+              <div className="min-w-0"><p className="mb-1 text-[10px] font-medium text-accent-strong">{isPreviewingTransition ? "Paused for preview" : isPlaying ? "Playing now" : "Paused"}</p><p className="truncate text-xs font-medium">{title}</p><p className="mt-0.5 truncate text-[11px] text-zinc-400">{currentMeta?.artist || "Unknown artist"}</p></div>
             </div>}
             {currentFile && upNext.length > 0 && <div className="px-5 pb-2"><TransitionChip from={currentFile} to={upNext[0].file} /></div>}
             {upNext.length === 0 ? <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 pb-16 text-center text-zinc-400"><ListMusic className="h-8 w-8 stroke-[1.25]" /><p className="text-sm">You’re all caught up</p><p className="max-w-48 text-xs leading-relaxed">Add a track to keep the music going.</p></div> : (

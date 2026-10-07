@@ -99,11 +99,19 @@ export class SyncServer extends Server<Env> {
     const device = this.devices.get(connection.id);
     // A close event from the previous socket must not evict its reconnected replacement.
     if (!device || device.connection !== connection) return;
-    device.connection = null;
-    // Keep the output and transport intent for the lease it already owns. A reconnect on
-    // the same PartySocket ID resumes control without pausing or reloading cached audio.
-    if (connection.id !== this.room.outputId && connection.id !== this.releasing?.id) this.devices.delete(connection.id);
+    this.devices.delete(connection.id);
+    // A disconnected page is terminated, not an output reserved until lease expiry.
+    // Removing it first makes selectOutput's old lease deadline expire immediately.
+    if (connection.id === this.room.outputId || connection.id === this.room.pendingOutputId) {
+      await this.selectOutput(null);
+      return;
+    }
+    if (connection.id === this.releasing?.id) this.finishHandoff();
     await this.publish();
+  }
+  async onError(connection: Connection) {
+    await this.onClose(connection);
+    connection.close(1011, "Connection failed");
   }
   async onAlarm() {
     const now = Date.now();

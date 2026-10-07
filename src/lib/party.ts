@@ -59,6 +59,22 @@ export function positionAt(p: PartyPlayback, now: number): number {
   const at = p.progress + (p.isPlaying ? Math.max(0, now - p.updatedAt) / 1000 : 0);
   return p.duration > 0 ? Math.min(p.duration, at) : at;
 }
+
+/** The output knows its real queue clock, including when a local audition borrows the
+ * audio elements. Controllers extrapolate the room clock until their next report. */
+export function playbackDisplay(
+  room: PartyRoom,
+  local: { isPlaying: boolean; progress: number; duration: number; syncRevision: number; isPreviewingTransition: boolean },
+  localOutput: boolean,
+  now: number,
+): Pick<PartyPlayback, "isPlaying" | "progress" | "duration"> {
+  if (!room.playback || (localOutput && (local.isPreviewingTransition || local.syncRevision === room.revision))) {
+    return { isPlaying: local.isPlaying && !local.isPreviewingTransition, progress: local.progress, duration: local.duration };
+  }
+  const p = room.playback;
+  return { isPlaying: p.isPlaying, duration: p.duration,
+    progress: room.outputId && !room.pendingOutputId ? positionAt(p, now) : p.progress };
+}
 export function upcoming(p: PartyPlayback): number[] {
   const order = p.shuffle ? p.shuffleOrder.slice(p.shuffleOrder.indexOf(p.currentIndex) + 1)
     : p.queue.map((_, i) => i).slice(p.currentIndex + 1);

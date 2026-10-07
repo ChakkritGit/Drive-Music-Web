@@ -126,6 +126,9 @@ export function TransitionEditor({ from, to, onClose }: TransitionEditorProps) {
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit transition"
         className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] dark:bg-zinc-900 sm:rounded-2xl sm:pb-5"
         onClick={(event) => event.stopPropagation()}
       >

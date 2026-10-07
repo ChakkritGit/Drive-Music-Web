@@ -90,49 +90,76 @@ describe("Party room", () => {
     expect(a.send).toHaveBeenLastCalledWith(JSON.stringify({ type: "heartbeat-request" }));
     expect(server.storage.setAlarm).toHaveBeenCalledWith(6000);
   });
-  it("preserves playback through a brief output socket reconnect", async () => {
+  it("terminates a refreshed output immediately and lets its new socket take over", async () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
     await send(server, a, { type: "heartbeat", sent: 0 });
-    const revision = server.room.revision;
-    const transport = server.room.transportRevision;
+    vi.setSystemTime(3000);
     await server.onClose(a);
+    expect(server.devices.has("a")).toBe(false);
     expect(server.room.devices.map(d => d.id)).toEqual(["b", "c"]);
-    vi.setSystemTime(16_000);
-    await server.onAlarm();
-    expect(server.room.outputId).toBe("a");
+    expect(server.room.outputId).toBeNull();
+    expect(server.releasing).toBeNull();
+    expect(server.room.playback).toMatchObject({ isPlaying: false, progress: 2, queue: playback.queue });
+    const refreshed = connection("refreshed-tab");
+    await send(server, refreshed, { type: "hello", protocol: PARTY_PROTOCOL, name: "a" });
+    await send(server, refreshed, { type: "output", id: refreshed.id });
+    expect(server.room.outputId).toBe(refreshed.id);
+    expect(server.room.pendingOutputId).toBeNull();
+    await send(server, refreshed, { type: "command", command: { type: "playing", value: true } });
     expect(server.room.playback?.isPlaying).toBe(true);
+  });
+  it("does not evict a replacement socket when the old socket closes late", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    const revision = server.room.revision;
     const reconnected = connection("a");
     await send(server, reconnected, { type: "hello", protocol: PARTY_PROTOCOL, name: "a" });
-    await send(server, reconnected, { type: "heartbeat", sent: 15_000 });
     await server.onClose(a);
     expect(server.room.devices.map(d => d.id)).toContain("a");
     expect(server.room.revision).toBe(revision);
-    expect(server.room.transportRevision).toBe(transport);
+    expect(server.room.outputId).toBe("a");
+    await send(server, reconnected, { type: "heartbeat", sent: 0 });
     expect(reconnected.send).toHaveBeenLastCalledWith(expect.stringContaining('"granted":true'));
   });
-  it("retains exclusivity when a disconnected output cannot acknowledge handoff", async () => {
+  it("switches immediately when the old output disconnects during a handoff", async () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
     await send(server, a, { type: "heartbeat", sent: 0 });
-    await server.onClose(a);
-    vi.setSystemTime(10_000);
     await send(server, b, { type: "output", id: "b" });
     expect(server.room.outputId).toBeNull();
     expect(server.room.pendingOutputId).toBe("b");
-    vi.setSystemTime(1000 + LEASE_MS - 1);
-    await server.onAlarm();
-    expect(server.room.outputId).toBeNull();
-    await send(server, b, { type: "heartbeat", sent: LEASE_MS - 1 });
-    vi.setSystemTime(1000 + LEASE_MS + 1);
-    await server.onAlarm();
+    await server.onClose(a);
     expect(server.room.outputId).toBe("b");
+    expect(server.room.pendingOutputId).toBeNull();
+    expect(server.releasing).toBeNull();
     expect(server.room.playback?.isPlaying).toBe(true);
   });
-  it("pauses an output only once its outstanding lease expires", async () => {
+  it("allows another device to take output immediately after a disconnect", async () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
     await server.onClose(a);
-    vi.setSystemTime(1000 + LEASE_MS);
-    await server.onAlarm();
     expect(server.room.outputId).toBeNull();
+    expect(server.room.playback?.isPlaying).toBe(false);
+    await send(server, b, { type: "output", id: "b" });
+    expect(server.room.outputId).toBe("b");
+    expect(server.releasing).toBeNull();
+  });
+  it("clears a disconnected pending target without granting it output later", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b" });
+    await server.onClose(b);
+    expect(server.room.pendingOutputId).toBeNull();
+    await send(server, a, { type: "released", revision: server.room.revision });
+    expect(server.room.outputId).toBeNull();
+    expect(server.room.playback?.isPlaying).toBe(false);
+  });
+  it("terminates errored sockets and ignores their later messages and close events", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await server.onError(a);
+    const revision = server.room.revision;
+    expect(a.close).toHaveBeenCalledWith(1011, "Connection failed");
+    expect(server.room.outputId).toBeNull();
+    await send(server, a, { type: "report", revision, playback });
+    await send(server, a, { type: "command", command: { type: "next" } });
+    await server.onClose(a);
+    expect(server.room.revision).toBe(revision);
     expect(server.room.playback?.isPlaying).toBe(false);
   });
   it("does not extend a handoff deadline for heartbeats from the released output", async () => {

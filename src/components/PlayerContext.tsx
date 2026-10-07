@@ -1716,7 +1716,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (document.visibilityState !== "visible") return;
       const audio = getActiveAudio();
       if (!audio) return;
-      setIsPlaying((current) => (current === audio.paused ? !audio.paused : current));
+      if (!isPreviewingRef.current) {
+        setIsPlaying((current) => (current === audio.paused ? !audio.paused : current));
+      }
       // iOS Safari suspends the shared AudioContext while the app is backgrounded — since
       // every audio element's output is routed exclusively through it (see ensureAudioGraph),
       // a suspended context silences playback even though `audio.paused` never changes.
@@ -2375,7 +2377,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       // Captured before anything is disturbed, so endPreview can put it back.
       const suspended = currentFile
-        ? { fileId: currentFile.id, progress: progressRef.current, wasPlaying: !outgoing.paused }
+        ? { fileId: currentFile.id, progress: outgoing.currentTime, wasPlaying: !outgoing.paused }
         : null;
       // Before the flag is set, since cancelCrossfade ends a running preview and would
       // otherwise tear down the one being set up here.
@@ -2387,6 +2389,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       isPreviewingRef.current = true;
       setIsPreviewingTransition(true);
       setIsPlaying(false);
+      if (suspended) {
+        progressRef.current = suspended.progress;
+        setProgress(suspended.progress);
+      }
       outgoing.pause();
       incoming.pause();
 
@@ -2435,7 +2441,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       incomingGain.gain.value = 0;
       await tryPlay(outgoing, audioContextRef.current);
       if (outgoing.paused) { endPreviewRef.current?.(); return; }
-      setIsPlaying(true);
+      if (!isPreviewingRef.current) return;
 
       previewLeadTimerRef.current = window.setTimeout(
         () => {
@@ -2527,8 +2533,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [endPreview]);
 
   const stopTransitionPreview = useCallback(() => {
-    endPreview();
-  }, [endPreview]);
+    // The editor uses this as its unmount cleanup. Volume/cache updates must not
+    // change its identity and accidentally stop the preview while it stays open.
+    endPreviewRef.current?.();
+  }, []);
 
 
   const seek = useCallback(
@@ -2605,8 +2613,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // Keeps the lock-screen/notification play/pause indicator in sync with actual playback state.
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
-    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-  }, [isPlaying]);
+    navigator.mediaSession.playbackState = isPlaying || isPreviewingTransition ? "playing" : "paused";
+  }, [isPlaying, isPreviewingTransition]);
 
   const changeVolume = useCallback(
     (value: number) => {
@@ -2827,7 +2835,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const handleLoadedMetadata = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
-      if (e.currentTarget !== getActiveAudio()) return;
+      if (e.currentTarget !== getActiveAudio() || isPreviewingRef.current) return;
       setDuration(e.currentTarget.duration);
     },
     [getActiveAudio],
@@ -2836,7 +2844,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const handlePlay = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       if (outputMutedRef.current) { e.currentTarget.pause(); return; }
-      if (e.currentTarget !== getActiveAudio() || e.currentTarget.paused) return;
+      if (e.currentTarget !== getActiveAudio() || e.currentTarget.paused || isPreviewingRef.current) return;
       setIsPlaying(true);
     },
     [getActiveAudio],

@@ -1,8 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
+import { LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, playbackDisplay, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
 import { canViewAnalytics } from "./admin";
 const files = ["a", "b", "c", "d"].map(id => ({ id, name: id, mimeType: "audio/mpeg" }));
 function state(): PartyPlayback { return reducePlayback(null, { type: "play", queue: files, index: 1 }, 1000)!; }
+describe("queue display during a transition preview", () => {
+  const room: PartyRoom = { type: "room", protocol: 2, revision: 10, outputId: "a",
+    pendingOutputId: null, devices: [], playback: { ...state(), progress: 40, duration: 240 } };
+  const local = { isPlaying: false, progress: 42.5, duration: 240, syncRevision: 10, isPreviewingTransition: true };
+
+  it("freezes the main track clock and play state while preview audio is playing", () => {
+    for (const now of [1000, 10000, 30000]) {
+      expect(playbackDisplay(room, { ...local, isPlaying: true }, true, now)).toEqual({
+        isPlaying: false, progress: 42.5, duration: 240,
+      });
+    }
+  });
+
+  it("keeps the frozen local clock through a queue revision during preview", () => {
+    expect(playbackDisplay({ ...room, revision: 11 }, local, true, 30000).progress).toBe(42.5);
+  });
+
+  it("resumes at the saved position without jumping to the stale shared clock", () => {
+    const restored = { ...local, isPreviewingTransition: false };
+    expect(playbackDisplay(room, restored, true, 30000)).toEqual({ isPlaying: false, progress: 42.5, duration: 240 });
+    expect(playbackDisplay(room, { ...restored, isPlaying: true, progress: 43 }, true, 31000))
+      .toEqual({ isPlaying: true, progress: 43, duration: 240 });
+  });
+
+  it("uses a new remote command until the local output has applied it", () => {
+    expect(playbackDisplay({ ...room, revision: 11 }, { ...local, isPreviewingTransition: false }, true, 11000))
+      .toEqual({ isPlaying: true, progress: 50, duration: 240 });
+  });
+
+  it("continues estimating playback for remote controllers and freezes during handoff", () => {
+    expect(playbackDisplay(room, local, false, 11000).progress).toBe(50);
+    expect(playbackDisplay({ ...room, outputId: null, pendingOutputId: "b" }, local, false, 11000).progress).toBe(40);
+  });
+});
 describe("shared playback", () => {
   it("advances the queue and refreshes upcoming tracks on next/previous", () => {
     const next = reducePlayback(state(), { type: "next" }, 1100)!;
