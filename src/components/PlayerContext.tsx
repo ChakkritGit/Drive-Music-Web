@@ -28,6 +28,7 @@ import { parseTrackMetadata } from "@/lib/metadata";
 import { extractFeatures } from "@/lib/features";
 import { createDefaultModel, predict, trainStep, weightedRandomIndex } from "@/lib/model";
 import { analyzeLoudnessGain } from "@/lib/loudness";
+import { createAudioRecovery, tryPlay } from "@/lib/audioPlayback";
 import { analyzeTrack } from "@/lib/analysisClient";
 import {
   AUTO_TRANSITION,
@@ -265,35 +266,6 @@ export function usePlayer(): PlayerContextValue {
 
 function clampEqGain(db: number): number {
   return Math.min(MAX_EQ_GAIN_DB, Math.max(-MAX_EQ_GAIN_DB, db));
-}
-
-/**
- * Calls `audio.play()`, swallowing the browser's autoplay-policy rejection instead of letting
- * it surface as a scary raw error — this fires routinely when play() happens (e.g. after an
- * await for a slow download) too long after the user gesture that triggered it for the
- * browser's "transient activation" window to still be considered active. The track is left
- * loaded and paused; the user can just press play.
- *
- * Also resumes `ctx` (the shared Web Audio graph — see ensureAudioGraph) if it's suspended.
- * Every call site here is gesture-adjacent (a click handler, or a load triggered by one), so
- * this is where the browser's separate "AudioContext needs a user gesture too" gate gets
- * satisfied, same spirit as the NotAllowedError handling below.
- */
-/** True when the shared graph exists but is not making sound. "interrupted" (a newer state some
- * browsers use for OS-level interruptions) is as silent as "suspended", and only resuming it
- * brings the audio back: the elements keep playing into a graph that outputs nothing. */
-function needsResume(ctx: AudioContext | null): ctx is AudioContext {
-  return !!ctx && ctx.state !== "running" && ctx.state !== "closed";
-}
-
-async function tryPlay(audio: HTMLAudioElement, ctx: AudioContext | null): Promise<void> {
-  try {
-    if (needsResume(ctx)) await ctx.resume();
-    await audio.play();
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "NotAllowedError") return;
-    throw err;
-  }
 }
 
 /** Returns the cached track for a file, downloading + parsing + storing it first if needed. */
@@ -596,6 +568,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // quiet track above 1.0 — HTMLMediaElement.volume alone caps at 1.0, so it can only ever turn
   // loud tracks down (see src/lib/loudness.ts).
   const audioContextRef = useRef<AudioContext | null>(null);
+  const [recoverAudio] = useState(createAudioRecovery);
   /** Who last asked for a pause, and when. handlePause credits them only if the pause follows
    * within a second; otherwise a stale request would take the blame for the browser's pause. */
   const pauseRequestRef = useRef<{ source: PauseSource; at: number; detail?: string } | null>(null);
@@ -663,7 +636,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // while anything is meant to be playing; if the browser refuses, the next play or the tab
     // becoming visible tries again.
     ctx.addEventListener("statechange", () => {
-      if (needsResume(ctx) && (!audioA.paused || !audioB.paused)) void ctx.resume().catch(() => {});
+      if (!outputMutedRef.current && (!audioA.paused || !audioB.paused)) recoverAudio(ctx);
     });
 
     const gainA = ctx.createGain();
@@ -737,7 +710,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     ctx.addEventListener("statechange", () => {
       if (process.env.NEXT_PUBLIC_PARTYKIT_HOST) grantPartyLease(outputLeaseUntilRef.current);
     });
-  }, [grantPartyLease]);
+  }, [grantPartyLease, recoverAudio]);
 
   useEffect(() => {
     ensureAudioGraph();
@@ -745,9 +718,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const unlockAudio = useCallback(() => {
     ensureAudioGraph();
-    const ctx = audioContextRef.current;
-    if (needsResume(ctx)) void ctx.resume().catch(() => {});
-  }, [ensureAudioGraph]);
+    recoverAudio(audioContextRef.current, true);
+  }, [ensureAudioGraph, recoverAudio]);
+
+  // Resume in the actual click/key gesture, before a track download or a Party Play
+  // round trip can consume its activation. Resuming the graph alone never starts a song.
+  useEffect(() => {
+    const unlock = () => {
+      if (!outputMutedRef.current) unlockAudio();
+    };
+    document.addEventListener("click", unlock, true);
+    document.addEventListener("keydown", unlock, true);
+    return () => {
+      document.removeEventListener("click", unlock, true);
+      document.removeEventListener("keydown", unlock, true);
+    };
+  }, [unlockAudio]);
 
   const getGainNode = useCallback((audio: HTMLAudioElement | null): GainNode | null => {
     if (!audio) return null;
@@ -1736,12 +1722,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // a suspended context silences playback even though `audio.paused` never changes.
       // Resume it here so audio that was genuinely still meant to be playing is actually
       // audible again, instead of depending on iOS's own (inconsistent) auto-resume.
-      const ctx = audioContextRef.current;
-      if (needsResume(ctx) && !audio.paused) void ctx.resume().catch(() => {});
+      if (!outputMutedRef.current && !audio.paused) recoverAudio(audioContextRef.current);
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [getActiveAudio]);
+    window.addEventListener("focus", handleVisibilityChange);
+    window.addEventListener("pageshow", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleVisibilityChange);
+      window.removeEventListener("pageshow", handleVisibilityChange);
+    };
+  }, [getActiveAudio, recoverAudio]);
 
   // Returns [order, positionOfPinned], reseeding the window only when it's stale (`pinned`
   // isn't in it — a fresh queue, or shuffle was just turned on) — a cheap no-op otherwise.
@@ -2777,6 +2768,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const handleTimeUpdate = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       const el = e.currentTarget;
+      // An interruption can outlast the first statechange/visibility resume attempt.
+      // The media clock still ticks, so use it to retry without restarting the track.
+      if (!outputMutedRef.current && !el.paused) recoverAudio(audioContextRef.current);
       // Runs for both elements (including the inactive one mid-fade-in) — see
       // advanceCrossfadeRamp's own comment for why this can't rely on rAF alone.
       advanceCrossfadeRamp();
@@ -2827,6 +2821,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       startArmedTransitionIfDue,
       armGapless,
       advanceCrossfadeRamp,
+      recoverAudio,
     ],
   );
 
