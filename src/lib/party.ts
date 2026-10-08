@@ -32,6 +32,8 @@ export interface PartyRoom {
   revision: number;
   /** Changes only for transport commands; queue/settings edits must not seek the output. */
   transportRevision?: number;
+  /** Changes only when playback must move to a new position or output. */
+  positionRevision?: number;
   devices: PartyDevice[];
   outputId: string | null;
   pendingOutputId: string | null;
@@ -53,6 +55,13 @@ export function isQueueCommand(command: PartyCommand): boolean {
 export function canPreserveTransport(previous: Pick<PartyRoom, "outputId" | "transportRevision"> | null, next: PartyRoom): boolean {
   return !!previous && previous.outputId === next.outputId && next.outputId !== null
     && next.transportRevision !== undefined && previous.transportRevision === next.transportRevision;
+}
+
+/** Play/pause changes use the output's actual clock. A missed seek still requires applying
+ * the shared position, even if a later play/pause command arrives in the same render. */
+export function canPreservePosition(previous: Pick<PartyRoom, "outputId" | "positionRevision"> | null, next: PartyRoom): boolean {
+  return !!previous && previous.outputId === next.outputId && next.outputId !== null
+    && next.positionRevision !== undefined && previous.positionRevision === next.positionRevision;
 }
 
 export function positionAt(p: PartyPlayback, now: number): number {

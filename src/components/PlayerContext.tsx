@@ -122,7 +122,7 @@ export interface PlayerContextValue {
   syncRevision: number;
   grantPartyLease: (until: number) => void;
   unlockAudio: () => void;
-  applyPartyPlayback: (playback: PartyPlayback, revision: number, preserveTransport?: boolean) => void;
+  applyPartyPlayback: (playback: PartyPlayback, revision: number, preserveTransport?: boolean, preservePosition?: boolean) => void;
   setPartyCommandHandler: (handler: ((command: PartyCommand) => void) | null) => void;
   queue: DriveFile[];
   currentFile: DriveFile | null;
@@ -807,7 +807,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   } | null>(null);
   // Several timeupdates land during the download/decode that arming does, and
   // `armedTransitionRef` isn't assigned until it finishes.
-  const armingTransitionRef = useRef(false);
+  const armingTransitionRef = useRef<number | null>(null);
   // Where the transition out of the *current* track should begin — a hand-placed marker, or the
   // outro that analysis found. Read by the arming trigger, which otherwise only knows how to
   // prepare "near the end of the track": a mix-out point a minute before the end would have
@@ -859,6 +859,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [currentMeta, setCurrentMeta] = useState<ParsedMetadata | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadedFileId, setLoadedFileId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -1087,6 +1088,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // Also disowns an arm that's still downloading/decoding: it checks this counter before
     // assigning itself, so a task in flight when the queue changed can't arm afterwards.
     armGenerationRef.current += 1;
+    armingTransitionRef.current = null;
     if (armed || armedTransition) {
       const idle = getInactiveAudio();
       if (idle) {
@@ -1390,6 +1392,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // A crossfade already faded this exact track in on the other audio element — promote
       // it instead of reloading (which would restart playback and undo the fade).
       if (crossfadeCommittedForRef.current === file.id) {
+        armGenerationRef.current += 1;
+        armingTransitionRef.current = null;
         crossfadeCommittedForRef.current = null;
         const demoted = outgoingAudio;
         // Flip first: the demoted element's pause below fires a native `pause` event, and
@@ -1420,10 +1424,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
 
         lastLoadedFileIdRef.current = file.id;
+        setLoadedFileId(file.id);
         setCurrentMeta(cachedTracks.get(file.id)?.parsedMeta ?? null);
         return;
       }
 
+      // Natural advances can happen while preparation of the old track's mix is
+      // still awaiting cache/analysis. It must not touch either slot after this load.
+      cancelCrossfade();
       setIsLoading(true);
       setError(null);
       setCurrentMeta(null);
@@ -1435,6 +1443,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         // Only mark this file as "loaded" once it has actually succeeded — a failure (e.g. no
         // access token yet) must NOT set this, so a retry once the token resolves still runs.
         lastLoadedFileIdRef.current = file.id;
+        setLoadedFileId(file.id);
         // Fire-and-forget: doesn't block playback starting, applies to future loads (and this
         // one live, once it resolves) once analysis finishes.
         void ensureLoudnessAnalyzed(track);
@@ -1875,7 +1884,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, [getInactiveAudio, getGainNode, volume, trackGain, playNextIndex]);
 
-  const handleEnded = useCallback(() => {
+  const handleEnded = useCallback((e: React.SyntheticEvent<HTMLAudioElement>) => {
+    // A queued ended event from a demoted slot can arrive after promotion commits.
+    if (e.currentTarget !== getActiveAudio()) return;
     // A preview's own tracks reaching their end is the preview's business, not the queue's.
     if (isPreviewingRef.current) return;
     // A crossfade already committed this transition (setCurrentIndex was called as the ramp
@@ -1936,13 +1947,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // inside another setter's updater is what caused shuffle to appear to reseed itself.
       if (currentIndex !== null && queue.length > 0) {
         const advanced = advanceShuffle(currentIndex);
-        if (advanced !== null) setCurrentIndex(advanced); // null (loop off, exhausted) — stop instead of reshuffling
+        if (advanced !== null) setCurrentIndex(advanced);
+        else setIsPlaying(false);
       }
       return;
     }
 
     const isLast = currentIndex !== null && currentIndex === queue.length - 1;
     if (loopMode === "off" && isLast) {
+      setIsPlaying(false);
       return; // Stop at the end of the queue instead of wrapping around.
     }
 
@@ -2167,8 +2180,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
    */
   const armTransition = useCallback(
     (outgoing: HTMLAudioElement) => {
-      if (armedTransitionRef.current || armingTransitionRef.current) return;
-      if (crossfadeStateRef.current) return;
+      if (armedTransitionRef.current || armingTransitionRef.current !== null) return;
+      if (crossfadeStateRef.current || crossfadeCommittedForRef.current) return;
 
       const position = outgoing.currentTime;
       const trackDuration = outgoing.duration;
@@ -2201,13 +2214,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       const generation = armGenerationRef.current;
       const outgoingFile = currentIndex !== null ? queue[currentIndex] : undefined;
-      armingTransitionRef.current = true;
+      armingTransitionRef.current = generation;
+      const isCurrent = () => generation === armGenerationRef.current
+        && outgoing === getActiveAudio() && incoming === getInactiveAudio();
 
       void (async () => {
         try {
           const track = await ensureCached(targetFile, session?.accessToken);
           await refreshCachedTracks();
-          if (generation !== armGenerationRef.current) return;
+          if (!isCurrent()) return;
 
           // The incoming track's analysis is what supplies its mix-in point — where the
           // arrangement actually arrives — and without it the plan falls back to 0:00, which is
@@ -2220,7 +2235,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           let incomingAnalysis = analysesRef.current.get(targetFile.id) ?? null;
           if (!incomingAnalysis && autoMixEnabled) {
             incomingAnalysis = await ensureAnalysis(targetFile);
-            if (generation !== armGenerationRef.current) return;
+            if (!isCurrent()) return;
           }
           const outgoingAnalysis = outgoingFile
             ? (analysesRef.current.get(outgoingFile.id) ?? null)
@@ -2253,8 +2268,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           incoming.preservesPitch = true;
           incoming.playbackRate = plan.incomingRate;
           incoming.load();
-          await seekWhenReady(incoming, plan.incomingStartSeconds);
-          if (generation !== armGenerationRef.current) return;
+          await whenMetadataReady(incoming);
+          if (!isCurrent()) return;
+          if (incoming.readyState >= 1) incoming.currentTime = plan.incomingStartSeconds;
 
           // A gapless join and a transition both want the idle element, and only one of them
           // can have it. The transition covers the same seam, so it wins — but the armed
@@ -2276,7 +2292,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           console.error(`Failed to prepare the transition into ${targetFile.name}`, err);
           transitionPrepFailuresRef.current.set(targetFile.id, Date.now());
         } finally {
-          armingTransitionRef.current = false;
+          if (armingTransitionRef.current === generation) armingTransitionRef.current = null;
         }
       })();
     },
@@ -2284,6 +2300,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       queue,
       currentIndex,
       peekNextIndex,
+      getActiveAudio,
       getInactiveAudio,
       getGainNode,
       session,
@@ -2782,6 +2799,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // Runs for both elements (including the inactive one mid-fade-in) — see
       // advanceCrossfadeRamp's own comment for why this can't rely on rAF alone.
       advanceCrossfadeRamp();
+      // The old slot remains active until React commits the promotion. Do not
+      // start preparing it again during that gap and overwrite the incoming song.
+      if (crossfadeCommittedForRef.current) return;
       // An audition is playing something that isn't the queue: its position is not the
       // session's position, and it must not persist anything or arm the next transition.
       if (isPreviewingRef.current) return;
@@ -2873,24 +2893,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const handlePause = useCallback(
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       if (e.currentTarget !== getActiveAudio() || !e.currentTarget.paused || isPreviewingRef.current) return;
-      // The browser fires `pause` immediately before `ended` when a track reaches its
-      // natural end. If a crossfade is still ramping at that exact moment (clock drift
-      // between the audio element's own playback clock and the rAF-driven ramp, even with
-      // the ramp clamped to the track's remaining time), let the ramp's own completion
-      // commit the transition instead of reading this as the user pausing and cancelling
-      // the already-fading-in next track.
+      // ended decides whether to advance or stop at the queue boundary. Publishing
+      // this transient pause would tell Party Play to pause the incoming song.
+      if (e.currentTarget.ended || crossfadeCommittedForRef.current) return;
       if (crossfadeStateRef.current) {
-        if (e.currentTarget.ended) return;
         cancelCrossfade();
       }
-      // Same story for a gapless join: this `pause` is the outgoing track hitting its end, and
-      // `ended` (which starts the pre-buffered next track on the other element) is about to
-      // fire. Reporting "paused" here would stick — the incoming element's own `play` event is
-      // ignored while it's still the inactive one.
-      if (e.currentTarget.ended && gaplessArmedRef.current) return;
-      // Same for a preview: it pauses and swaps sources on both elements by design, and none of
-      // that is the queue's playback state.
-      if (isPreviewingRef.current) return;
       // A track reaching its end pauses too; only stops before the end are worth a line.
       const request = pauseRequestRef.current;
       const asked = request && performance.now() - request.at < 1000 ? request.source : null;
@@ -2927,7 +2935,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [cancelCrossfade, grantPartyLease]);
 
-  const applyPartyPlayback = useCallback((playback: PartyPlayback, revision: number, preserveTransport = false) => {
+  const applyPartyPlayback = useCallback((playback: PartyPlayback, revision: number, preserveTransport = false, preservePosition = false) => {
     const file = playback.queue[playback.currentIndex];
     if (preserveTransport && file?.id === currentFile?.id) {
       // Keep the active source, clock and play state untouched. Only remap the upcoming
@@ -2943,6 +2951,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           cancelCrossfade();
         } else {
           armGenerationRef.current++;
+          armingTransitionRef.current = null;
           if (nextIndex !== null) {
             if (fading) fading.targetIndex = nextIndex;
             if (armed) armed.targetIndex = nextIndex;
@@ -2984,11 +2993,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const audio = getActiveAudio();
     if (file?.id === lastLoadedFileIdRef.current && audio?.getAttribute("src")) {
       void (async () => {
-        audio.currentTime = positionAt(playback, Date.now());
+        // A play-state command must not flush the decoder by seeking to the room's
+        // older clock. Seek only for an actual position change or a fresh handoff.
+        if (!preservePosition) audio.currentTime = positionAt(playback, Date.now());
         progressRef.current = audio.currentTime;
         setProgress(audio.currentTime);
-        if (playback.isPlaying && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
-        else {
+        if (playback.isPlaying && !outputMutedRef.current) {
+          if (audio.paused) await tryPlay(audio, audioContextRef.current);
+        } else {
           pauseRequestRef.current = { source: "sync", at: performance.now(), detail: "Shared playback paused" };
           audio.pause();
         }
@@ -2996,8 +3008,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (playback.isPlaying && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
         setIsPlaying(!audio.paused);
         pendingPartyRef.current = null;
-        setSyncRevision(revision);
-      })();
+        setSyncRevision(pending.revision);
+      })().catch((err: unknown) => {
+        // A later pause/seek can abort an earlier play promise. Only the request
+        // still owning the transport may publish a failure or acknowledge a revision.
+        if (pendingPartyRef.current !== pending) return;
+        setError(err instanceof Error ? err.message : "Failed to play track");
+        setIsPlaying(false);
+        pendingPartyRef.current = null;
+        setSyncRevision(pending.revision);
+      });
     }
   }, [cancelCrossfade, getActiveAudio, currentFile?.id]);
 
@@ -3009,7 +3029,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       currentFile,
       currentMeta,
       isPlaying,
-      isLoading,
+      isLoading: isLoading || (!error && !!currentFile && loadedFileId !== currentFile.id),
       error,
       progress,
       duration,
@@ -3088,6 +3108,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       currentMeta,
       isPlaying,
       isLoading,
+      loadedFileId,
       error,
       progress,
       duration,

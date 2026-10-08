@@ -11,6 +11,7 @@ import { DevicePicker } from "@/components/DevicePicker";
 import { useSync } from "@/components/SyncContext";
 import { TrackRow } from "@/components/TrackRow";
 import { TransitionChip } from "@/components/TransitionChip";
+import { SeekSlider } from "@/components/SeekSlider";
 import { analysisSummary } from "@/lib/analysis";
 
 function formatTime(sec: number): string {
@@ -146,9 +147,8 @@ export function FullPlayer() {
 
             {error && <p role="status" className="mt-3 text-xs text-red-500">{error}</p>}
             <div className="mt-7 sm:mt-9">
-              <input type="range" min={0} max={duration || 0} step={0.1} value={Math.min(progress, duration || 0)}
-                onChange={e => seek(Number(e.target.value))} className="seek w-full" aria-label="Seek"
-                style={{ "--pct": `${duration ? Math.min(100, progress / duration * 100) : 0}%` } as React.CSSProperties} />
+              <SeekSlider key={currentFile?.id ?? "none"} value={progress} duration={duration}
+                onSeek={seek} className="seek w-full" />
               <div className="mt-1 flex justify-between text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
                 <span>{formatTime(progress)}</span><span>{formatTime(duration)}</span>
               </div>

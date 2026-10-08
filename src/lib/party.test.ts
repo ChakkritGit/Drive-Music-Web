@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, playbackDisplay, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
+import { LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, canPreservePosition, playbackDisplay, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
 import { canViewAnalytics } from "./admin";
 const files = ["a", "b", "c", "d"].map(id => ({ id, name: id, mimeType: "audio/mpeg" }));
 function state(): PartyPlayback { return reducePlayback(null, { type: "play", queue: files, index: 1 }, 1000)!; }
@@ -95,6 +95,25 @@ describe("shared playback", () => {
     expect(canPreserveTransport(room, { ...room, outputId: "b" })).toBe(false);
     expect(canPreserveTransport(null, room)).toBe(false);
     expect(canPreserveTransport(room, { ...room, transportRevision: undefined })).toBe(false);
+  });
+  it("preserves the output's clock for pause/resume but applies a missed seek", () => {
+    const room: PartyRoom = { type: "room", protocol: 2, revision: 10, transportRevision: 10, positionRevision: 3,
+      outputId: "a", pendingOutputId: null, devices: [], playback: state() };
+    const paused = { ...room, revision: 11, transportRevision: 11 };
+    expect(canPreserveTransport(room, paused)).toBe(false);
+    expect(canPreservePosition(room, paused)).toBe(true);
+    const resumedAfterSeek = { ...room, revision: 13, transportRevision: 13, positionRevision: 12 };
+    expect(canPreservePosition(room, resumedAfterSeek)).toBe(false);
+    expect(canPreservePosition({ ...room, positionRevision: 12 }, resumedAfterSeek)).toBe(true);
+  });
+  it("applies the shared clock for new outputs and workers without position versions", () => {
+    const room: PartyRoom = { type: "room", protocol: 2, revision: 10, positionRevision: 3,
+      outputId: "a", pendingOutputId: null, devices: [], playback: state() };
+    expect(canPreservePosition(null, room)).toBe(false);
+    expect(canPreservePosition(room, { ...room, outputId: "b" })).toBe(false);
+    expect(canPreservePosition(room, { ...room, outputId: null })).toBe(false);
+    expect(canPreservePosition(room, { ...room, positionRevision: undefined })).toBe(false);
+    expect(canPreservePosition({ ...room, positionRevision: undefined }, room)).toBe(false);
   });
   it("restricts Analytics to the owner", () => {
     expect(canViewAnalytics("NongTonNee@gmail.com")).toBe(true);

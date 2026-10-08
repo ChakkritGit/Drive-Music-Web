@@ -26,6 +26,14 @@ The status worker integration is in `/Volumes/SSD256GB/WebProfile/portfolio/stat
 
 The implementation checks above preceded the production release.
 
+## Playback continuity fixes (2026-10-08)
+
+Natural end-of-track pause events no longer publish a paused queue while the next track is starting. Events from a demoted audio slot are ignored, and a completed crossfade cannot start preparing the outgoing track again before React promotes the incoming slot. Pending preparation is invalidated on track changes, and local playback reports wait until the selected file is loaded.
+
+The optional `positionRevision` changes on seeks, track commands and output handoffs. Play/pause commands preserve the output's real clock without resetting its decoder to an older room position. Clients still apply a missed seek when several commands arrive together. The seek sliders hold a local draft while scrubbing and send one command on release. Superseded asynchronous play attempts cannot overwrite newer pause/seek state.
+
+Regression checks exercise the real React player with controlled media events and Web Audio stubs, plus pointer/keyboard seek gestures. Four targeted tests fail against the preceding player implementation and pass with these changes. Physical audio hardware is not simulated by these tests.
+
 ## Queue continuity update (2026-10-07)
 
 The room now includes an optional `transportRevision`, advanced by play/pause/seek/skip and output handoffs. Queue insertion/removal, shuffle and repeat change the general revision only. The output applies those edits without seeking, restarting or reloading the current audio, and remaps any prepared transition by track identity. A queued transport command still applies if its snapshot was coalesced with a later queue edit. Older workers fall back to full reconciliation until upgraded.

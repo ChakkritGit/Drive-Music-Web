@@ -21,6 +21,7 @@ import { useSync } from "@/components/SyncContext";
 import { DevicePicker } from "@/components/DevicePicker";
 import { TrackRow } from "@/components/TrackRow";
 import { TransitionChip } from "@/components/TransitionChip";
+import { SeekSlider } from "@/components/SeekSlider";
 
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -243,16 +244,12 @@ export function Player() {
           </div>
           <div className="hidden w-full max-w-xl items-center gap-2.5 text-xs text-zinc-500 tabular-nums lg:flex dark:text-zinc-400">
             <span className="w-10 text-right">{formatTime(progress)}</span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              step={0.1}
-              value={Math.min(progress, duration || 0)}
-              onChange={(e) => seek(Number(e.target.value))}
+            <SeekSlider
+              key={currentFile?.id ?? "none"}
+              value={progress}
+              duration={duration}
+              onSeek={seek}
               className="seek flex-1"
-              style={{ "--pct": `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` } as React.CSSProperties}
-              aria-label="Seek"
             />
             <span className="w-10">{formatTime(duration)}</span>
           </div>

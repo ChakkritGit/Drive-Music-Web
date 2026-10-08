@@ -8,7 +8,7 @@ vi.mock("partyserver", () => ({
   routePartykitRequest: vi.fn(async () => null),
 }));
 import worker, { SyncServer } from "./index";
-import { LEASE_MS, PARTY_PROTOCOL, reducePlayback } from "../src/lib/party";
+import { LEASE_MS, PARTY_PROTOCOL, canPreservePosition, reducePlayback } from "../src/lib/party";
 import type { Connection } from "partyserver";
 const connection = (id: string) => ({ id, send: vi.fn(), close: vi.fn() }) as unknown as Connection;
 const playback = reducePlayback(null, { type: "play", queue: ["a", "b", "c"].map(id => ({ id, name: id, mimeType: "audio/mpeg" })), index: 0 }, 1000)!;
@@ -181,12 +181,15 @@ describe("Party room", () => {
   it("updates queue revisions without restarting transport", async () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
     const transport = server.room.transportRevision;
+    const position = server.room.positionRevision;
     const revision = server.room.revision;
     await send(server, b, { type: "command", command: { type: "insert", file: playback.queue[2] } });
     expect(server.room.revision).toBeGreaterThan(revision);
     expect(server.room.transportRevision).toBe(transport);
+    expect(server.room.positionRevision).toBe(position);
     await send(server, c, { type: "command", command: { type: "remove", index: 1, fileId: "c" } });
     expect(server.room.transportRevision).toBe(transport);
+    expect(server.room.positionRevision).toBe(position);
     expect(server.room.playback?.queue.map(f => f.id)).toEqual(["a", "b"]);
   });
   it("retains a seek version when queue edits arrive before the output can apply it", async () => {
@@ -202,7 +205,56 @@ describe("Party room", () => {
   it("versions playback when inserting into an empty room", async () => {
     await send(server, a, { type: "command", command: { type: "insert", file: playback.queue[0] } });
     expect(server.room.transportRevision).toBe(server.room.revision);
+    expect(server.room.positionRevision).toBe(server.room.revision);
     expect(server.room.playback?.isPlaying).toBe(true);
+  });
+  it("changes play state without requesting another seek to the shared clock", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    const position = server.room.positionRevision;
+    for (const command of [{ type: "toggle" }, { type: "playing", value: true }, { type: "playing", value: false }]) {
+      const transport = server.room.transportRevision;
+      await send(server, b, { type: "command", command });
+      expect(server.room.positionRevision).toBe(position);
+      expect(server.room.transportRevision).toBeGreaterThan(transport!);
+    }
+  });
+  it("retains a pending seek through pause/resume and queue edits", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    const applied = { ...server.room };
+    await send(server, b, { type: "command", command: { type: "seek", seconds: 37 } });
+    const sought = server.room.positionRevision;
+    expect(sought).toBe(server.room.revision);
+    await send(server, b, { type: "command", command: { type: "playing", value: false } });
+    await send(server, c, { type: "command", command: { type: "insert", file: playback.queue[2] } });
+    await send(server, b, { type: "command", command: { type: "playing", value: true } });
+    expect(server.room.positionRevision).toBe(sought);
+    expect(server.room.playback?.progress).toBe(37);
+    expect(canPreservePosition(applied, server.room)).toBe(false);
+  });
+  it("requests a new position for track selection, skips and handoff", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    for (const command of [{ type: "next" }, { type: "previous" }, { type: "play", queue: playback.queue, index: 0 }]) {
+      const position = server.room.positionRevision;
+      await send(server, b, { type: "command", command });
+      expect(server.room.positionRevision).toBeGreaterThan(position!);
+      expect(server.room.positionRevision).toBe(server.room.revision);
+    }
+    const beforeHandoff = server.room.positionRevision;
+    await send(server, b, { type: "output", id: "b" });
+    await send(server, a, { type: "released", revision: server.room.revision });
+    expect(server.room.outputId).toBe("b");
+    expect(server.room.positionRevision).toBeGreaterThan(beforeHandoff!);
+    expect(server.room.positionRevision).toBe(server.room.revision);
+  });
+  it("does not seek the output again after it reports an automatic transition", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    const applied = { ...server.room };
+    await send(server, a, { type: "report", revision: server.room.revision,
+      playback: { ...playback, currentIndex: 1, progress: 3, isPlaying: true } });
+    expect(server.room.playback?.currentIndex).toBe(1);
+    expect(server.room.positionRevision).toBe(applied.positionRevision);
+    await send(server, b, { type: "command", command: { type: "toggle" } });
+    expect(canPreservePosition(applied, server.room)).toBe(true);
   });
   it("exposes a public health check without exposing room data", async () => {
     const response = await worker.fetch(new Request("https://worker/health"), { PARTY_TOKEN_SECRET: "configured" });

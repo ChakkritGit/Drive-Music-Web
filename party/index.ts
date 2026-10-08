@@ -9,7 +9,7 @@ type Device = { name: string; seen: number; leaseUntil: number; connection: Conn
 /** One serialized, authoritative playback room per authenticated account. */
 export class SyncServer extends Server<Env> {
   devices = new Map<string, Device>();
-  room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, transportRevision: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
+  room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, transportRevision: 0, positionRevision: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
   releasing: { id: string; until: number } | null = null;
 
   async onStart() {
@@ -50,6 +50,7 @@ export class SyncServer extends Server<Env> {
     this.releasing = null;
     this.room.revision++;
     this.room.transportRevision = this.room.revision;
+    this.room.positionRevision = this.room.revision;
     if (this.room.playback) this.room.playback = { ...this.room.playback, isPlaying: this.room.outputId ? this.room.playback.isPlaying : false, updatedAt: Date.now() };
   }
   async onMessage(connection: Connection, raw: string | ArrayBuffer | ArrayBufferView) {
@@ -87,6 +88,7 @@ export class SyncServer extends Server<Env> {
       const playback = reducePlayback(base, m.command, now);
       if (playback === this.room.playback) return;
       if (!base || !isQueueCommand(m.command)) this.room.transportRevision = this.room.revision + 1;
+      if (!base || ["play", "next", "previous", "seek"].includes(m.command.type)) this.room.positionRevision = this.room.revision + 1;
       this.room.playback = playback;
       this.room.revision++;
       await this.publish();

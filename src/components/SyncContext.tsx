@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import usePartySocket from "partysocket/react";
 import { SharedPlayerProvider, usePlayer, type PlayerContextValue } from "@/components/PlayerContext";
 import { useToast } from "@/components/ToastContext";
-import { HEARTBEAT_MS, PARTY_PROTOCOL, canPreserveTransport, leaseDeadline, playbackDisplay, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
+import { HEARTBEAT_MS, PARTY_PROTOCOL, canPreserveTransport, canPreservePosition, leaseDeadline, playbackDisplay, upcoming, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
 
 interface SyncContextValue {
   devices: PartyRoom["devices"];
@@ -56,7 +56,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const roomRef = useRef(room);
   const idRef = useRef<string | null>(null);
   const leaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const applied = useRef<{ key: string; outputId: string | null; transportRevision?: number } | null>(null);
+  const applied = useRef<{ key: string; outputId: string | null; transportRevision?: number; positionRevision?: number } | null>(null);
   const leaseUntil = useRef(0);
   useEffect(() => { playerRef.current = player; });
   const silence = useCallback((reason = "Output changed or session ended") => {
@@ -185,10 +185,11 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     const key = `${deviceId}:${room.revision}`;
     if (applied.current?.key === key) return;
     const preserveTransport = canPreserveTransport(applied.current, room);
+    const preservePosition = canPreservePosition(applied.current, room);
     const acquiringOutput = !applied.current;
-    applied.current = { key, outputId: room.outputId, transportRevision: room.transportRevision };
+    applied.current = { key, outputId: room.outputId, transportRevision: room.transportRevision, positionRevision: room.positionRevision };
     if (acquiringOutput) playerRef.current.setOutputMuted(false);
-    if (room.playback) playerRef.current.applyPartyPlayback(room.playback, room.revision, preserveTransport);
+    if (room.playback) playerRef.current.applyPartyPlayback(room.playback, room.revision, preserveTransport, preservePosition);
   }, [available, connected, room, deviceId, lease]);
 
   // Only the output reports real playback (including automatic transitions and autoplay failures).
