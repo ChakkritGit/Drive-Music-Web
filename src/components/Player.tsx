@@ -65,7 +65,7 @@ export function Player() {
     cachedTracks,
     removeFromQueue,
   } = usePlayer();
-  const { outputName, outputId, deviceId, pendingOutputId } = useSync();
+  const { outputName, outputId, deviceId, pendingOutputId, localPlayback } = useSync();
   const pathname = usePathname();
   const { status } = useSession();
   // The mobile bottom tab nav (see app/(app)/layout.tsx) renders only for routes inside that
@@ -200,7 +200,7 @@ export function Player() {
               ) : pendingOutputId ? (
                 "Switching output…"
               ) : outputName ? (
-                outputId === deviceId ? "Sound on this device" : `Sound on ${outputName}`
+                localPlayback || outputId === deviceId ? "Sound on this device" : `Sound on ${outputName}`
               ) : (
                 currentMeta?.artist || " "
               )}

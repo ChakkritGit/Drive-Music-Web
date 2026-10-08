@@ -1,16 +1,17 @@
 import { Server, routePartykitRequest, type Connection } from "partyserver";
 import { jwtVerify } from "jose";
 import type { SyncTokenPayload } from "../src/lib/sync";
-import { HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validPlayback, type PartyRoom } from "../src/lib/party";
+import { HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validPlayback, type PartyCommand, type PartyRoom } from "../src/lib/party";
 
 interface Env { PARTY_TOKEN_SECRET: string }
-type Device = { name: string; seen: number; leaseUntil: number; connection: Connection | null };
+type Device = { name: string; seen: number; leaseUntil: number; connection: Connection | null; commands: boolean };
 
-/** One serialized, authoritative playback room per authenticated account. */
+/** One command router and playback mirror per authenticated account. */
 export class SyncServer extends Server<Env> {
   devices = new Map<string, Device>();
-  room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, transportRevision: 0, positionRevision: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
+  room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, transportRevision: 0, positionRevision: 0, controlMode: "snapshots", commandRevision: 0, outputGeneration: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
   releasing: { id: string; until: number } | null = null;
+  pendingCommands: PartyCommand[] = [];
 
   async onStart() {
     const playback = await this.ctx.storage.get<unknown>("playback");
@@ -19,6 +20,9 @@ export class SyncServer extends Server<Env> {
   }
   onConnect(connection: Connection) { connection.send(JSON.stringify({ ...this.room, serverTime: Date.now() })); }
   async publish() {
+    if (this.room.outputId && !this.room.pendingOutputId && this.pendingCommands.length) {
+      for (const command of this.pendingCommands.splice(0)) this.dispatchCommand(command);
+    }
     this.room.devices = [...this.devices].filter(([, d]) => d.connection).map(([id, d]) => ({ id, name: d.name }));
     this.broadcast(JSON.stringify({ ...this.room, serverTime: Date.now() }));
     if (this.room.playback) await this.ctx.storage.put("playback", this.room.playback);
@@ -32,6 +36,7 @@ export class SyncServer extends Server<Env> {
   }
   async selectOutput(id: string | null) {
     if (id === this.room.outputId && !this.releasing) return;
+    if (id !== this.room.pendingOutputId) this.pendingCommands = [];
     if (this.room.playback) this.room.playback = { ...this.room.playback, progress: this.releasing ? this.room.playback.progress : positionAt(this.room.playback, Date.now()), updatedAt: Date.now() };
     if (this.room.outputId) {
       this.releasing = { id: this.room.outputId, until: this.devices.get(this.room.outputId)?.leaseUntil ?? Date.now() };
@@ -51,7 +56,30 @@ export class SyncServer extends Server<Env> {
     this.room.revision++;
     this.room.transportRevision = this.room.revision;
     this.room.positionRevision = this.room.revision;
+    this.room.outputGeneration = (this.room.outputGeneration ?? 0) + 1;
+    this.room.commandRevision = 0;
+    this.room.controlMode = this.room.outputId && this.devices.get(this.room.outputId)?.commands ? "commands" : "snapshots";
     if (this.room.playback) this.room.playback = { ...this.room.playback, isPlaying: this.room.outputId ? this.room.playback.isPlaying : false, updatedAt: Date.now() };
+  }
+  dispatchCommand(command: PartyCommand) {
+    const output = this.room.outputId ? this.devices.get(this.room.outputId) : null;
+    if (output?.commands && output.connection) {
+      this.room.commandRevision = (this.room.commandRevision ?? 0) + 1;
+      this.room.revision++;
+      output.connection.send(JSON.stringify({ type: "player-command", protocol: PARTY_PROTOCOL,
+        outputId: this.room.outputId, outputGeneration: this.room.outputGeneration,
+        revision: this.room.commandRevision, command }));
+      return;
+    }
+    // Existing tabs advertise no command support. Retain their old room reducer
+    // until they reload, while new outputs never receive snapshot-driven control.
+    const base = this.room.playback;
+    const playback = reducePlayback(base, command, Date.now());
+    if (playback === base) return;
+    if (!base || !isQueueCommand(command)) this.room.transportRevision = this.room.revision + 1;
+    if (!base || ["play", "next", "previous", "seek"].includes(command.type)) this.room.positionRevision = this.room.revision + 1;
+    this.room.playback = playback;
+    this.room.revision++;
   }
   async onMessage(connection: Connection, raw: string | ArrayBuffer | ArrayBufferView) {
     if (typeof raw !== "string" || raw.length > 2_000_000) return;
@@ -62,7 +90,7 @@ export class SyncServer extends Server<Env> {
     if (m.type === "hello" && m.protocol === PARTY_PROTOCOL && typeof m.name === "string") {
       const previous = this.devices.get(connection.id);
       this.devices.set(connection.id, { name: m.name.slice(0, 80), seen: now,
-        leaseUntil: previous?.leaseUntil ?? 0, connection });
+        leaseUntil: previous?.leaseUntil ?? 0, connection, commands: m.commands === true });
       connection.send(JSON.stringify({ type: "welcome", deviceId: connection.id }));
       await this.publish();
       return;
@@ -76,23 +104,32 @@ export class SyncServer extends Server<Env> {
       const granted = this.room.outputId === connection.id;
       if (granted) device.leaseUntil = now + LEASE_MS;
       connection.send(JSON.stringify({ type: "lease", sent: m.sent, leaseMs: LEASE_MS, revision: this.room.revision, granted }));
+    } else if (m.type === "detach" && (this.room.outputId === connection.id || this.room.pendingOutputId === connection.id || this.releasing?.id === connection.id)) {
+      // A reconnected main player can continue standalone. Give up only its
+      // Party reservation, without routing a pause back into that transport.
+      if (this.room.outputId === connection.id) {
+        device.leaseUntil = 0;
+        await this.selectOutput(null);
+        return;
+      } else if (this.releasing?.id === connection.id) this.finishHandoff();
+      else { await this.selectOutput(null); return; }
+      await this.publish();
     } else if (m.type === "output" && typeof m.id === "string" && this.devices.get(m.id)?.connection) {
-      if (!this.room.playback && validPlayback(m.seed)) this.room.playback = { ...m.seed, updatedAt: now };
+      if ((!this.room.playback || (!this.room.outputId && !this.room.pendingOutputId)) && validPlayback(m.seed)) this.room.playback = { ...m.seed, updatedAt: now };
       await this.selectOutput(m.id);
     } else if (m.type === "released" && this.releasing?.id === connection.id && m.revision === this.room.revision) {
       this.finishHandoff();
       await this.publish();
     } else if (m.type === "command" && validCommand(m.command)) {
       if (!this.room.outputId && !this.room.pendingOutputId) await this.selectOutput(connection.id);
-      const base = this.room.playback && this.releasing ? { ...this.room.playback, updatedAt: now } : this.room.playback;
-      const playback = reducePlayback(base, m.command, now);
-      if (playback === this.room.playback) return;
-      if (!base || !isQueueCommand(m.command)) this.room.transportRevision = this.room.revision + 1;
-      if (!base || ["play", "next", "previous", "seek"].includes(m.command.type)) this.room.positionRevision = this.room.revision + 1;
-      this.room.playback = playback;
-      this.room.revision++;
+      if (this.room.pendingOutputId) {
+        if (this.pendingCommands.length < 100) this.pendingCommands.push(m.command);
+        return;
+      }
+      this.dispatchCommand(m.command);
       await this.publish();
-    } else if (m.type === "report" && connection.id === this.room.outputId && m.revision === this.room.revision && validPlayback(m.playback)) {
+    } else if (m.type === "report" && connection.id === this.room.outputId && validPlayback(m.playback)) {
+      if (device.commands ? (m.outputGeneration !== this.room.outputGeneration || m.commandRevision !== this.room.commandRevision) : m.revision !== this.room.revision) return;
       this.room.playback = { ...m.playback, updatedAt: now };
       await this.publish();
     }

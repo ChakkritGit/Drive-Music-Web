@@ -8,7 +8,7 @@ import { useSync } from "@/components/SyncContext";
 
 /** Shared by the bottom bar and Now Playing, including on small screens. */
 export function DevicePicker() {
-  const { devices, deviceId, outputId, pendingOutputId, selectOutput, connected, syncAvailable } = useSync();
+  const { devices, deviceId, outputId, pendingOutputId, selectOutput, connected, syncAvailable, localPlayback } = useSync();
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const button = useRef<HTMLButtonElement>(null);
@@ -39,7 +39,7 @@ export function DevicePicker() {
     {open && createPortal(<div ref={menu} role="dialog" aria-label="Devices" style={position}
       className="fixed z-[100] max-h-[calc(100dvh-1rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
       <p className="px-3 pt-2 pb-1 text-xs font-semibold tracking-wider text-zinc-500 uppercase">Play on</p>
-      <p className="px-3 pb-2 text-xs text-zinc-500">{connected ? "One output. Control the shared queue from any device." : "Connecting to Party Play…"}</p>
+      <p className="px-3 pb-2 text-xs text-zinc-500">{connected ? "Select an output to share playback controls." : localPlayback ? "Playback continues on this device. Reconnecting to Party Play…" : "Connecting to Party Play…"}</p>
       {devices.map(device => <button key={device.id} disabled={!connected} aria-pressed={outputId === device.id}
         onClick={() => { selectOutput(device.id); setOpen(false); }}
         className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-900">

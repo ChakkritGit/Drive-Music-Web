@@ -34,6 +34,12 @@ export interface PartyRoom {
   transportRevision?: number;
   /** Changes only when playback must move to a new position or output. */
   positionRevision?: number;
+  /** Modern outputs own transport; room snapshots only describe their actual playback. */
+  controlMode?: "commands" | "snapshots";
+  /** Explicit controls use their own acknowledgement sequence, separate from room publishes. */
+  commandRevision?: number;
+  /** A fresh output grant invalidates commands and reports from its previous ownership. */
+  outputGeneration?: number;
   devices: PartyDevice[];
   outputId: string | null;
   pendingOutputId: string | null;
@@ -46,6 +52,23 @@ export type PartyCommand =
   | { type: "seek"; seconds: number }
   | { type: "insert"; file: DriveFile }
   | { type: "remove"; index: number; fileId: string };
+
+export interface PartyPlayerCommand {
+  type: "player-command";
+  protocol: typeof PARTY_PROTOCOL;
+  outputId: string;
+  revision: number;
+  outputGeneration: number;
+  command: PartyCommand;
+}
+
+/** Only explicit messages to the current output may drive an existing transport. */
+export function validPlayerCommand(value: unknown): value is PartyPlayerCommand {
+  if (!object(value)) return false;
+  return value.type === "player-command" && value.protocol === PARTY_PROTOCOL
+    && typeof value.outputId === "string" && Number.isInteger(value.revision) && finite(value.revision)
+    && Number.isInteger(value.outputGeneration) && finite(value.outputGeneration) && validCommand(value.command);
+}
 
 export function isQueueCommand(command: PartyCommand): boolean {
   return ["insert", "remove", "shuffle", "loop"].includes(command.type);
@@ -98,7 +121,7 @@ function shuffled(length: number, current: number): number[] {
   }
   return [current, ...rest];
 }
-/** Commands are reduced in arrival order by the room, never against a controller's stale queue. */
+/** Outputs reduce explicit commands against their actual queue; legacy rooms also use this reducer. */
 export function reducePlayback(previous: PartyPlayback | null, command: PartyCommand, now: number): PartyPlayback | null {
   if (command.type === "play") {
     if (!command.queue[command.index]) return previous;

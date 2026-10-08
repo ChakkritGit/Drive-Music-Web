@@ -28,7 +28,7 @@ export function FullPlayer() {
     isPreviewingTransition,
   } = usePlayer();
   const { isFavorite, toggleFavorite } = usePlaylists();
-  const { outputName, outputId, deviceId, pendingOutputId, connected, syncAvailable } = useSync();
+  const { outputName, outputId, deviceId, pendingOutputId, connected, syncAvailable, localPlayback } = useSync();
   const [showQueue, setShowQueue] = useState(false);
   const [wasExpanded, setWasExpanded] = useState(isExpanded);
   const artworkGlow = useRef<HTMLDivElement>(null);
@@ -174,8 +174,8 @@ export function FullPlayer() {
               <div className="flex min-w-0 items-center gap-2">
                 <DevicePicker />
                 <div className="min-w-0 text-xs">
-                  <p className="truncate text-zinc-600 dark:text-zinc-300">{pendingOutputId ? "Switching output…" : syncAvailable && !connected ? "Reconnecting…" : outputName ? outputId === deviceId ? "This device" : outputName : "Audio output"}</p>
-                  {outputName && <p className="mt-0.5 text-[10px] text-zinc-400">{outputId === deviceId ? "Playing here" : "Control from here"}</p>}
+                  <p className="truncate text-zinc-600 dark:text-zinc-300">{pendingOutputId ? "Switching output…" : localPlayback ? "This device" : syncAvailable && !connected ? "Reconnecting…" : outputName ? outputId === deviceId ? "This device" : outputName : "Audio output"}</p>
+                  {outputName && <p className="mt-0.5 text-[10px] text-zinc-400">{localPlayback || outputId === deviceId ? "Playing here" : "Control from here"}</p>}
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">

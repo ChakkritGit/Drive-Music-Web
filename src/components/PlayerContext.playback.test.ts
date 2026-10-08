@@ -207,6 +207,40 @@ afterEach(async () => {
 });
 
 describe("playback across media events", () => {
+  it("seeks the native player directly while a Party controller is installed", async () => {
+    await mount();
+    const partyCommand = vi.fn();
+    await act(async () => { player.setPartyCommandHandler(partyCommand); });
+    const [active] = slots();
+    const source = active.src;
+    seeks.length = 0;
+    await act(async () => { player.seek(47); });
+    expect(partyCommand).not.toHaveBeenCalled();
+    expect(seeks).toEqual([47]);
+    expect(active.currentTime).toBe(47);
+    expect(active.src).toBe(source);
+    expect(active.paused).toBe(false);
+    expect(player.progress).toBe(47);
+  });
+
+  it("advances a natural end locally while a Party controller is installed", async () => {
+    await mount();
+    const partyCommand = vi.fn();
+    await act(async () => {
+      player.setPartyCommandHandler(partyCommand);
+      player.setGaplessEnabled(false);
+    });
+    const [outgoing] = slots();
+    await act(async () => {
+      Object.assign(state(outgoing), { paused: true, ended: true, currentTime: 100 });
+      outgoing.dispatchEvent(new Event("pause"));
+      outgoing.dispatchEvent(new Event("ended"));
+    });
+    expect(partyCommand).not.toHaveBeenCalled();
+    expect(player.currentFile?.id).toBe("second");
+    expect(player.isPlaying).toBe(true);
+  });
+
   it("blocks a new track's report before its load effect replaces the outgoing audio", async () => {
     await mount();
     renders.length = 0;
@@ -282,6 +316,117 @@ describe("playback across media events", () => {
     expect(player.isPlaying).toBe(true);
   });
 
+  it("seeks and pauses the incoming slot after crossfade completion before React commits", async () => {
+    await mount();
+    await act(async () => { player.setCrossfadeEnabled(true); });
+    const [outgoing, incoming] = slots();
+    await timeupdate(outgoing, 80);
+    await timeupdate(outgoing, 96);
+    const source = incoming.src;
+    incoming.currentTime = 3.9;
+    clock += 5000;
+    await act(async () => {
+      outgoing.currentTime = 99.9;
+      outgoing.dispatchEvent(new Event("timeupdate"));
+      // These callbacks still close over the previous render. The transport's
+      // active-slot ownership must already belong to the incoming song.
+      player.seek(42);
+      player.executePartyCommand({ type: "playing", value: false });
+      expect(incoming.currentTime).toBe(42);
+      expect(incoming.paused).toBe(true);
+    });
+    expect(player.currentFile?.id).toBe("second");
+    expect(incoming.src).toBe(source);
+    expect(incoming.currentTime).toBe(42);
+    expect(incoming.paused).toBe(true);
+    expect(player.isPlaying).toBe(false);
+    expect(player.progress).toBe(42);
+    expect(outgoing.getAttribute("src")).toBeNull();
+  });
+
+  it("retains a new-track seek and pause while waiting for metadata", async () => {
+    await mount();
+    const ready = vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(0);
+    const [active] = slots();
+    vi.mocked(HTMLMediaElement.prototype.play).mockClear();
+    await act(async () => { player.play(files, 1); });
+    expect(player.currentFile?.id).toBe("second");
+    expect(player.isLoading).toBe(true);
+    await act(async () => {
+      player.seek(63);
+      player.executePartyCommand({ type: "playing", value: false });
+      // An old clock tick must not replace the requested position while the
+      // decoder has yet to accept the new seek.
+      active.dispatchEvent(new Event("timeupdate"));
+    });
+    expect(player.progress).toBe(63);
+    ready.mockReturnValue(4);
+    await act(async () => { active.dispatchEvent(new Event("loadedmetadata")); });
+    expect(active.currentTime).toBe(63);
+    expect(active.paused).toBe(true);
+    expect(player.isPlaying).toBe(false);
+    expect(player.isLoading).toBe(false);
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
+  it("applies a seek to the requested new track after its download finishes", async () => {
+    await mount();
+    const [active] = slots();
+    const outgoingSource = active.src;
+    let finishDownload!: () => void;
+    database.getCachedTrack.mockImplementationOnce(() => new Promise<CachedTrack>(resolve => {
+      finishDownload = () => resolve(tracks.get("second")!);
+    }));
+    await act(async () => { player.play(files, 1); });
+    expect(player.isLoading).toBe(true);
+    await act(async () => {
+      player.seek(64);
+      player.executePartyCommand({ type: "playing", value: false });
+    });
+    // The old source is still present, but the seek belongs to the requested
+    // track and must not rewind or scrub the preceding song.
+    expect(active.src).toBe(outgoingSource);
+    expect(active.currentTime).toBe(0);
+    expect(player.progress).toBe(64);
+    await act(async () => { finishDownload(); });
+    expect(active.src).not.toBe(outgoingSource);
+    expect(active.currentTime).toBe(64);
+    expect(active.paused).toBe(true);
+    expect(player.isPlaying).toBe(false);
+    expect(player.isLoading).toBe(false);
+  });
+
+  it("keeps a newer seek and pause when an earlier new-track play promise settles", async () => {
+    await mount();
+    const [active] = slots();
+    let finishPlay!: () => void;
+    vi.mocked(HTMLMediaElement.prototype.play).mockImplementationOnce(function (this: HTMLMediaElement) {
+      state(this).paused = false;
+      state(this).ended = false;
+      this.dispatchEvent(new Event("play"));
+      return new Promise<void>(resolve => {
+        finishPlay = () => {
+          // A late decoder completion cannot restore its old playing intent.
+          state(active).paused = false;
+          resolve();
+        };
+      });
+    });
+    await act(async () => { player.play(files, 1); });
+    expect(player.isLoading).toBe(true);
+    await act(async () => {
+      player.seek(71);
+      player.executePartyCommand({ type: "playing", value: false });
+    });
+    await act(async () => { finishPlay(); });
+    expect(player.currentFile?.id).toBe("second");
+    expect(active.currentTime).toBe(71);
+    expect(active.paused).toBe(true);
+    expect(player.isPlaying).toBe(false);
+    expect(player.isLoading).toBe(false);
+    expect(player.error).toBeNull();
+  });
+
   it("holds the displayed transport still during preview and restores the original song", async () => {
     await mount();
     const [active] = slots();
@@ -328,6 +473,21 @@ describe("playback across media events", () => {
     expect(seeks[0]).toBeCloseTo(68, 1);
     expect(active.src).toBe(source);
     expect(active.paused).toBe(false);
+  });
+  it("does not let preview restoration overwrite a newer seek and pause command", async () => {
+    await mount();
+    const [active] = slots();
+    await timeupdate(active, 23);
+    await act(async () => { await player.previewTransition(files[1], files[2], AUTO_TRANSITION); });
+    await act(async () => {
+      player.executePartyCommand({ type: "seek", seconds: 70 });
+      player.executePartyCommand({ type: "playing", value: false });
+    });
+    expect(player.isPreviewingTransition).toBe(false);
+    expect(active.currentTime).toBe(70);
+    expect(player.progress).toBe(70);
+    expect(active.paused).toBe(true);
+    expect(player.isPlaying).toBe(false);
   });
 
   it("ignores an aborted resume after a newer shared pause has already taken effect", async () => {

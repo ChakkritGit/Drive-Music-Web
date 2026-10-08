@@ -121,8 +121,10 @@ export interface PlayerContextValue {
   currentIndex: number | null;
   syncRevision: number;
   grantPartyLease: (until: number) => void;
+  setPartyLeaseRequired: (required: boolean) => void;
   unlockAudio: () => void;
   applyPartyPlayback: (playback: PartyPlayback, revision: number, preserveTransport?: boolean, preservePosition?: boolean) => void;
+  executePartyCommand: (command: PartyCommand) => void;
   setPartyCommandHandler: (handler: ((command: PartyCommand) => void) | null) => void;
   queue: DriveFile[];
   currentFile: DriveFile | null;
@@ -541,9 +543,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const { showToast } = useToast();
   // Two audio elements so a crossfade can play the outgoing and incoming track at once —
   // `activeSlotRef` says which one is "the" player for everything else (progress, seek,
-  // volume, ...). It only ever changes inside the load effect's crossfade-commit branch,
-  // right before the demoted element is paused, so a stray pause event from the demoted
-  // element is never misread as the active track pausing.
+  // volume, ...). A prepared transition promotes the slot synchronously, so a seek
+  // arriving before React renders still controls the incoming song.
   const audioARef = useRef<HTMLAudioElement | null>(null);
   const audioBRef = useRef<HTMLAudioElement | null>(null);
   const activeSlotRef = useRef<AudioSlot>("A");
@@ -587,7 +588,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // A gentle, always-on limiter — not user-facing (no toggle/settings) — so boosting a quiet
   // track for volume normalization can't drive a peak into clipping.
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
-  const outputMutedRef = useRef(Boolean(process.env.NEXT_PUBLIC_PARTYKIT_HOST));
+  const outputMutedRef = useRef(false);
+  const partyLeaseRequiredRef = useRef(false);
   const outputLeaseUntilRef = useRef(0);
   const outputGateRef = useRef<GainNode | null>(null);
   const grantPartyLease = useCallback((until: number) => {
@@ -597,10 +599,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!ctx || !gate) return;
     const remaining = Math.max(0, until - performance.now()) / 1000;
     gate.gain.cancelScheduledValues(ctx.currentTime);
-    gate.gain.setValueAtTime(!outputMutedRef.current && remaining > 0 ? 1 : 0, ctx.currentTime);
+    gate.gain.setValueAtTime(!outputMutedRef.current && (!partyLeaseRequiredRef.current || remaining > 0) ? 1 : 0, ctx.currentTime);
     // Audio-thread deadline still silences a background tab whose JS timers are throttled.
-    gate.gain.setValueAtTime(0, ctx.currentTime + remaining);
+    if (partyLeaseRequiredRef.current) gate.gain.setValueAtTime(0, ctx.currentTime + remaining);
   }, []);
+  const setPartyLeaseRequired = useCallback((required: boolean) => {
+    partyLeaseRequiredRef.current = required;
+    grantPartyLease(outputLeaseUntilRef.current);
+  }, [grantPartyLease]);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const analyserDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const audioGraphInitializedRef = useRef(false);
@@ -849,6 +855,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const lastLoadedFileIdRef = useRef<string | null>(null);
 
   const partyCommandRef = useRef<((command: PartyCommand) => void) | null>(null);
+  const playingIntentRef = useRef(false);
+  const pendingSeekRef = useRef<{ fileId: string; seconds: number } | null>(null);
+  const seekGenerationRef = useRef(0);
   const pendingPartyRef = useRef<{ playback: PartyPlayback; revision: number } | null>(null);
   const [syncRevision, setSyncRevision] = useState(-1);
   const setPartyCommandHandler = useCallback((handler: ((command: PartyCommand) => void) | null) => {
@@ -1105,7 +1114,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
     }
     const state = crossfadeStateRef.current;
-    if (!state) return;
+    if (!state) {
+      const active = getActiveAudio();
+      const gainNode = getGainNode(active);
+      const fileId = crossfadeCommittedForRef.current ?? (currentIndex !== null ? queue[currentIndex]?.id : undefined);
+      if (gainNode) gainNode.gain.value = volume * (volumeNormalizationEnabled && fileId ? (cachedTracks.get(fileId)?.loudnessGain ?? 1) : 1);
+      return;
+    }
     crossfadeStateRef.current = null;
     // Both slots, not just the surviving one — an abandoned mix leaves a partly-closed filter
     // and a partly-swapped bass shelf on each, and the silenced slot's would still be there the
@@ -1214,6 +1229,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       volumeNormalizationEnabled ? (cachedTracks.get(fileId)?.loudnessGain ?? 1) : 1,
     [volumeNormalizationEnabled, cachedTracks],
   );
+
+  const promotePreparedTrack = useCallback((fileId: string) => {
+    const outgoing = getActiveAudio();
+    crossfadeCommittedForRef.current = fileId;
+    activeSlotRef.current = activeSlotRef.current === "A" ? "B" : "A";
+    playingIntentRef.current = true;
+    pendingSeekRef.current = null;
+    seekGenerationRef.current++;
+    // Pause only after switching ownership: its queued pause/ended events belong
+    // to the old slot, even before the new track's React state has committed.
+    outgoing?.pause();
+    const incoming = getActiveAudio();
+    if (incoming) {
+      progressRef.current = incoming.currentTime;
+      setProgress(incoming.currentTime);
+      setDuration(Number.isFinite(incoming.duration) ? incoming.duration : 0);
+      setIsPlaying(!incoming.paused);
+    }
+  }, [getActiveAudio]);
 
   // Analyzes a newly-cached track's loudness in the background (once per track — a no-op if
   // already analyzed) and persists the result, so every later play of it is gain-adjusted
@@ -1363,7 +1397,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       // The previous track's "turn" just ended (skipped or finished) — train the listening
       // model on how much of it actually got played, reading straight from the DOM's own
       // playback position to avoid any React state-timing races.
-      const outgoingAudio = getActiveAudio();
+      const outgoingAudio = crossfadeCommittedForRef.current === file.id ? getInactiveAudio() : getActiveAudio();
       const previousFile = previousFileRef.current;
       if (outgoingAudio && previousFile) {
         const dur = outgoingAudio.duration;
@@ -1396,9 +1430,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         armingTransitionRef.current = null;
         crossfadeCommittedForRef.current = null;
         const demoted = outgoingAudio;
-        // Flip first: the demoted element's pause below fires a native `pause` event, and
-        // handlePause only reacts to it if it still looks like the active element.
-        activeSlotRef.current = activeSlotRef.current === "A" ? "B" : "A";
+        // Ownership was already switched when the transition completed.
         if (demoted) {
           demoted.pause();
           demoted.removeAttribute("src");
@@ -1409,7 +1441,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         fadeObjectUrlRef.current = null;
 
         const promoted = getActiveAudio();
-        if (promoted?.paused) void tryPlay(promoted, audioContextRef.current);
+        if (promoted && !playingIntentRef.current) promoted.pause();
         if (promoted) {
           // It was already playing as the inactive element, so its `play` event was ignored
           // by handlePlay's active-only guard — nothing else would flip this back on.
@@ -1431,6 +1463,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       // Natural advances can happen while preparation of the old track's mix is
       // still awaiting cache/analysis. It must not touch either slot after this load.
+      if (crossfadeCommittedForRef.current) {
+        crossfadeCommittedForRef.current = null;
+        const demoted = getInactiveAudio();
+        demoted?.pause();
+        demoted?.removeAttribute("src");
+        demoted?.load();
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = fadeObjectUrlRef.current;
+        fadeObjectUrlRef.current = null;
+      }
       cancelCrossfade();
       setIsLoading(true);
       setError(null);
@@ -1459,34 +1501,33 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const audio = getActiveAudio();
         if (audio) {
           audio.src = url;
+          const seekGeneration = seekGenerationRef.current;
           const gainNode = getGainNode(audio);
           if (gainNode) {
             gainNode.gain.value = volume * (volumeNormalizationEnabled ? (track.loudnessGain ?? 1) : 1);
           }
           const party = pendingPartyRef.current;
-          if (party && party.playback.queue[party.playback.currentIndex]?.id === file.id) {
-            audio.currentTime = positionAt(party.playback, Date.now());
-            progressRef.current = audio.currentTime;
-            setProgress(audio.currentTime);
-            if (party.playback.isPlaying && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
-            else {
-              pauseRequestRef.current = { source: "sync", at: performance.now(), detail: "Shared playback paused" };
-              audio.pause();
-            }
-            if (party.playback.isPlaying && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
-            if (pendingPartyRef.current === party) { pendingPartyRef.current = null; setSyncRevision(party.revision); }
-          } else if (restore) {
-            // Restoring the last session — resume position, but don't auto-play (browsers
-            // block unprompted audio anyway, and it'd be surprising on a plain page load).
-            audio.currentTime = restore.progress;
-            progressRef.current = restore.progress;
-            setProgress(restore.progress);
-          } else {
-            audio.currentTime = 0;
-            if (!outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
+          const acquiring = party?.playback.queue[party.playback.currentIndex]?.id === file.id ? party : null;
+          if (restore && !acquiring) playingIntentRef.current = false;
+          await whenMetadataReady(audio);
+          const ownsSource = () => !cancelled && audio === getActiveAudio() && audio.getAttribute("src") === url;
+          if (!ownsSource()) return;
+          const requestedSeek = pendingSeekRef.current?.fileId === file.id ? pendingSeekRef.current : null;
+          if (audio.readyState >= 1 && (requestedSeek || seekGeneration === seekGenerationRef.current)) {
+            audio.currentTime = requestedSeek?.seconds ?? (acquiring ? positionAt(acquiring.playback, Date.now()) : restore?.progress ?? 0);
+            pendingSeekRef.current = null;
           }
+          progressRef.current = audio.currentTime;
+          setProgress(audio.currentTime);
+          if (playingIntentRef.current && !outputMutedRef.current) await tryPlay(audio, audioContextRef.current);
+          if (!ownsSource()) return;
+          if (!playingIntentRef.current || outputMutedRef.current) audio.pause();
+          setIsPlaying(!audio.paused);
+          if (acquiring && playingIntentRef.current && audio.paused && !outputMutedRef.current) setError("Tap Play on this device to allow audio.");
+          if (acquiring && pendingPartyRef.current === acquiring) { pendingPartyRef.current = null; setSyncRevision(acquiring.revision); }
         }
       } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         if (!cancelled) {
           console.error("Failed to load track", err);
           setError(err instanceof Error ? err.message : "Failed to load track");
@@ -1559,6 +1600,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const play = useCallback(
     (newQueue: DriveFile[], index: number, source?: PlaySource) => {
       cancelCrossfade();
+      playingIntentRef.current = true;
+      pendingSeekRef.current = null;
+      seekGenerationRef.current++;
       // Shuffle stays on across a new queue — eagerly seed a fresh windowed shuffle order
       // right away (pinned at the starting track) so "Up Next" is correct immediately, not
       // just after the first skip. But picking a track out of "Up Next" (Player.tsx) calls this
@@ -1661,32 +1705,44 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [queue, currentIndex, showToast, cancelCrossfade],
   );
 
+  const setPlaying = useCallback((playing: boolean, source: PauseSource = "button") => {
+    playingIntentRef.current = playing;
+    if (!playing && suspendedPlaybackRef.current) suspendedPlaybackRef.current.wasPlaying = false;
+    if (pendingPartyRef.current) pendingPartyRef.current.playback.isPlaying = playing;
+    const audio = getActiveAudio();
+    if (!audio) return;
+    if (playing) {
+      const gainNode = getGainNode(audio);
+      const fileId = crossfadeCommittedForRef.current ?? currentFile?.id;
+      if (gainNode && fileId && !crossfadeStateRef.current) gainNode.gain.value = volume * trackGain(fileId);
+      const sourceIsCurrent = !!crossfadeCommittedForRef.current || currentFile?.id === lastLoadedFileIdRef.current;
+      if (!outputMutedRef.current && sourceIsCurrent && audio.paused && audio.getAttribute("src")) {
+        void tryPlay(audio, audioContextRef.current).catch((err: unknown) => {
+          if (!playingIntentRef.current || audio !== getActiveAudio() || (err instanceof DOMException && err.name === "AbortError")) return;
+          setError(err instanceof Error ? err.message : "Failed to play track");
+        });
+      }
+    } else {
+      cancelCrossfade();
+      pauseRequestRef.current = { source, at: performance.now() };
+      getActiveAudio()?.pause();
+      setIsPlaying(false);
+    }
+  }, [getActiveAudio, getGainNode, currentFile?.id, volume, trackGain, cancelCrossfade]);
+
   const togglePlay = useCallback((source?: unknown) => {
     if (isPreviewingRef.current) {
+      playingIntentRef.current = false;
       if (suspendedPlaybackRef.current) suspendedPlaybackRef.current.wasPlaying = false;
       endPreviewRef.current?.();
       setIsPlaying(false);
       return;
     }
-    if (partyCommandRef.current) { partyCommandRef.current({ type: "toggle" }); return; }
     const audio = getActiveAudio();
     if (!audio) return;
-    if (audio.paused) {
-      // Outside a transition the active slot's level is fully determined, so put it back: a fade
-      // cut short while the tab was hidden could leave it at 0, playing silently.
-      const gainNode = getGainNode(audio);
-      if (gainNode && currentFile && !crossfadeStateRef.current) {
-        gainNode.gain.value = volume * trackGain(currentFile.id);
-      }
-      void tryPlay(audio, audioContextRef.current);
-    } else {
-      // Pausing mid-crossfade would otherwise leave the inactive element silently playing (or
-      // stuck at a partial volume) — simplest correct behavior is to cut the fade short.
-      cancelCrossfade();
-      pauseRequestRef.current = { source: typeof source === "string" ? (source as PauseSource) : "button", at: performance.now() };
-      audio.pause();
-    }
-  }, [getActiveAudio, cancelCrossfade, getGainNode, currentFile, volume, trackGain]);
+    const loading = currentFile?.id !== lastLoadedFileIdRef.current && !crossfadeCommittedForRef.current;
+    setPlaying(loading ? !playingIntentRef.current : audio.paused, typeof source === "string" ? source as PauseSource : "button");
+  }, [getActiveAudio, currentFile?.id, setPlaying]);
 
   // Spacebar toggles play/pause anywhere in the app — except while the user is actually
   // typing/focused on an interactive element, where Space needs to keep doing its normal job
@@ -1707,7 +1763,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       e.preventDefault(); // stop the page from scrolling on Space
       if (e.repeat) return; // held down — keep suppressing scroll, but don't toggle repeatedly
-      togglePlay("space");
+      if (partyCommandRef.current) partyCommandRef.current({ type: "toggle" });
+      else togglePlay("space");
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1798,8 +1855,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // resolveShuffleOrder sees "current index isn't in the window" and reseeds a whole fresh
   // window from scratch — i.e. shuffle appearing to "re-shuffle everything" on every advance.
   const next = useCallback(() => {
-    if (partyCommandRef.current) { partyCommandRef.current({ type: "next" }); return; }
     cancelCrossfade();
+    playingIntentRef.current = true;
+    pendingSeekRef.current = null;
+    seekGenerationRef.current++;
     if (queue.length === 0) return;
     if (currentIndex === null) {
       setCurrentIndex(0);
@@ -1819,8 +1878,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [queue, currentIndex, shuffle, advanceShuffle, playNextIndex, cancelCrossfade]);
 
   const prev = useCallback(() => {
-    if (partyCommandRef.current) { partyCommandRef.current({ type: "previous" }); return; }
     cancelCrossfade();
+    playingIntentRef.current = true;
+    pendingSeekRef.current = null;
+    seekGenerationRef.current++;
     if (queue.length === 0) return;
     if (currentIndex === null) {
       setCurrentIndex(0);
@@ -1878,11 +1939,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     incoming.currentTime = 0;
     void tryPlay(incoming, audioContextRef.current);
 
-    crossfadeCommittedForRef.current = armed.fileId;
+    promotePreparedTrack(armed.fileId);
     if (playNextIndex === armed.index) setPlayNextIndex(null);
     setCurrentIndex(armed.index);
     return true;
-  }, [getInactiveAudio, getGainNode, volume, trackGain, playNextIndex]);
+  }, [getInactiveAudio, getGainNode, volume, trackGain, playNextIndex, promotePreparedTrack]);
 
   const handleEnded = useCallback((e: React.SyntheticEvent<HTMLAudioElement>) => {
     // A queued ended event from a demoted slot can arrive after promotion commits.
@@ -2118,10 +2179,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    crossfadeCommittedForRef.current = state.targetFile.id;
+    promotePreparedTrack(state.targetFile.id);
     if (playNextIndex === state.targetIndex) setPlayNextIndex(null);
     setCurrentIndex(state.targetIndex);
-  }, [playNextIndex]);
+  }, [playNextIndex, promotePreparedTrack]);
 
   /** Starts the ramp. Everything it needs has already been decided and prepared by the caller —
    * this is deliberately the only synchronous, no-decisions step of a transition. */
@@ -2535,13 +2596,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     active.src = url;
     const activeGain = getGainNode(active);
     if (activeGain) activeGain.gain.value = volume * trackGain(suspended.fileId);
+    const seekGeneration = seekGenerationRef.current;
     void (async () => {
-      await seekWhenReady(active, suspended.progress);
-      progressRef.current = suspended.progress;
-      setProgress(suspended.progress);
+      await whenMetadataReady(active);
       if (active.getAttribute("src") !== url || isPreviewingRef.current) return;
-      if (suspended.wasPlaying && !outputMutedRef.current) await tryPlay(active, audioContextRef.current);
-    })();
+      if (seekGeneration === seekGenerationRef.current && active.readyState >= 1) active.currentTime = suspended.progress;
+      progressRef.current = active.currentTime;
+      setProgress(active.currentTime);
+      if (suspended.wasPlaying && playingIntentRef.current && !outputMutedRef.current) await tryPlay(active, audioContextRef.current);
+    })().catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (active.getAttribute("src") === url) setError(err instanceof Error ? err.message : "Failed to restore playback");
+    });
   }, [getActiveAudio, getInactiveAudio, getGainNode, currentFile, volume, trackGain]);
 
   // cancelCrossfade needs to be able to end a preview, and is defined far above this.
@@ -2558,14 +2624,29 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const seek = useCallback(
     (seconds: number) => {
-      if (partyCommandRef.current) { partyCommandRef.current({ type: "seek", seconds }); return; }
+      if (!Number.isFinite(seconds)) return;
       cancelCrossfade();
       const audio = getActiveAudio();
-      if (audio) audio.currentTime = seconds;
-      progressRef.current = seconds;
-      setProgress(seconds);
+      const fileId = crossfadeCommittedForRef.current ?? currentFile?.id;
+      if (!audio || !fileId) return;
+      const sourceIsCurrent = fileId === lastLoadedFileIdRef.current || !!crossfadeCommittedForRef.current;
+      const maximum = sourceIsCurrent && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : Infinity;
+      const target = Math.max(0, Math.min(seconds, maximum));
+      const generation = ++seekGenerationRef.current;
+      pendingSeekRef.current = { fileId, seconds: target };
+      progressRef.current = target;
+      setProgress(target);
+      if (fileId !== lastLoadedFileIdRef.current && !crossfadeCommittedForRef.current) return;
+      const source = audio.getAttribute("src");
+      const apply = () => {
+        if (generation !== seekGenerationRef.current || audio !== getActiveAudio() || audio.getAttribute("src") !== source || audio.readyState < 1) return;
+        audio.currentTime = target;
+        pendingSeekRef.current = null;
+      };
+      if (audio.readyState >= 1) apply();
+      else void whenMetadataReady(audio).then(apply);
     },
-    [getActiveAudio, cancelCrossfade],
+    [getActiveAudio, cancelCrossfade, currentFile?.id],
   );
 
   // Registers lock-screen/notification playback controls — the standard way to tell iOS/Android
@@ -2578,7 +2659,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     // already playing (headphones reconnecting, another app releasing audio) paused the music.
     navigator.mediaSession.setActionHandler("play", () => {
       if (partyCommandRef.current) partyCommandRef.current({ type: "playing", value: true });
-      else if (getActiveAudio()?.paused) togglePlay();
+      else setPlaying(true, "media-session");
     });
     navigator.mediaSession.setActionHandler("pause", () => {
       if (partyCommandRef.current) { partyCommandRef.current({ type: "playing", value: false }); return; }
@@ -2586,10 +2667,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (!audio || audio.paused) return;
       togglePlay("media-session");
     });
-    navigator.mediaSession.setActionHandler("previoustrack", () => prev());
-    navigator.mediaSession.setActionHandler("nexttrack", () => next());
+    navigator.mediaSession.setActionHandler("previoustrack", () => partyCommandRef.current ? partyCommandRef.current({ type: "previous" }) : prev());
+    navigator.mediaSession.setActionHandler("nexttrack", () => partyCommandRef.current ? partyCommandRef.current({ type: "next" }) : next());
     navigator.mediaSession.setActionHandler("seekto", (details) => {
-      if (typeof details.seekTime === "number") seek(details.seekTime);
+      if (typeof details.seekTime === "number") {
+        if (partyCommandRef.current) partyCommandRef.current({ type: "seek", seconds: details.seekTime });
+        else seek(details.seekTime);
+      }
     });
     return () => {
       navigator.mediaSession.setActionHandler("play", null);
@@ -2598,7 +2682,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       navigator.mediaSession.setActionHandler("nexttrack", null);
       navigator.mediaSession.setActionHandler("seekto", null);
     };
-  }, [togglePlay, prev, next, seek, getActiveAudio]);
+  }, [togglePlay, prev, next, seek, getActiveAudio, setPlaying]);
 
   // Keeps the lock-screen/notification metadata (title/artist/artwork) in sync with the
   // current track.
@@ -2807,6 +2891,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (isPreviewingRef.current) return;
       if (el !== getActiveAudio()) return;
       const t = el.currentTime;
+      if (pendingSeekRef.current) return;
       progressRef.current = t;
       setProgress(t);
       if (Date.now() - lastSessionSaveRef.current > SESSION_SAVE_THROTTLE_MS) {
@@ -2865,6 +2950,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (e: React.SyntheticEvent<HTMLAudioElement>) => {
       if (outputMutedRef.current) { e.currentTarget.pause(); return; }
       if (e.currentTarget !== getActiveAudio() || e.currentTarget.paused || isPreviewingRef.current) return;
+      if (!playingIntentRef.current) { e.currentTarget.pause(); return; }
       setIsPlaying(true);
     },
     [getActiveAudio],
@@ -2923,6 +3009,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     outputMutedRef.current = muted;
     if (process.env.NEXT_PUBLIC_PARTYKIT_HOST) grantPartyLease(outputLeaseUntilRef.current);
     if (muted) {
+      playingIntentRef.current = false;
       pauseRequestRef.current = { source: "sync", at: performance.now(), detail: reason };
       if (suspendedPlaybackRef.current) suspendedPlaybackRef.current.wasPlaying = false;
       cancelCrossfade();
@@ -2979,6 +3066,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     cancelCrossfade();
+    playingIntentRef.current = playback.isPlaying;
+    pendingSeekRef.current = null;
+    seekGenerationRef.current++;
     setError(null);
     const pending = { playback, revision };
     pendingPartyRef.current = pending;
@@ -3021,9 +3111,32 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [cancelCrossfade, getActiveAudio, currentFile?.id]);
 
+  // Commands are applied to the actual local queue and audio clock. Party room
+  // snapshots are only used to acquire an output; reports never call this.
+  const executePartyCommand = useCallback((command: PartyCommand) => {
+    switch (command.type) {
+      case "play": play(command.queue, command.index, command.source); break;
+      case "toggle": togglePlay(); break;
+      case "playing": setPlaying(command.value, "sync"); break;
+      case "seek": seek(command.seconds); break;
+      case "next": next(); break;
+      case "previous": {
+        if ((getActiveAudio()?.currentTime ?? 0) > 3) seek(0);
+        else prev();
+        break;
+      }
+      case "shuffle": toggleShuffle(); break;
+      case "loop": cycleLoopMode(); break;
+      case "insert": addToQueue(command.file); break;
+      case "remove":
+        if (queue[command.index]?.id === command.fileId) removeFromQueue(command.index);
+        break;
+    }
+  }, [play, togglePlay, setPlaying, seek, next, prev, getActiveAudio, toggleShuffle, cycleLoopMode, addToQueue, queue, removeFromQueue]);
+
   const value = useMemo<PlayerContextValue>(
     () => ({
-      currentIndex, syncRevision, applyPartyPlayback, setPartyCommandHandler, grantPartyLease, unlockAudio,
+      currentIndex, syncRevision, applyPartyPlayback, executePartyCommand, setPartyCommandHandler, grantPartyLease, setPartyLeaseRequired, unlockAudio,
       setOutputMuted,
       queue,
       currentFile,
@@ -3101,7 +3214,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       collapse,
     }),
     [
-      currentIndex, syncRevision, applyPartyPlayback, setPartyCommandHandler, grantPartyLease, unlockAudio,
+      currentIndex, syncRevision, applyPartyPlayback, executePartyCommand, setPartyCommandHandler, grantPartyLease, setPartyLeaseRequired, unlockAudio,
       setOutputMuted,
       queue,
       currentFile,

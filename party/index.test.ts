@@ -256,6 +256,99 @@ describe("Party room", () => {
     await send(server, b, { type: "command", command: { type: "toggle" } });
     expect(canPreservePosition(applied, server.room)).toBe(true);
   });
+  it("routes modern controls to the output without reducing its playback mirror", async () => {
+    await send(server, a, { type: "hello", protocol: PARTY_PROTOCOL, name: "a", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    const generation = server.room.outputGeneration;
+    const actual = server.room.playback;
+    vi.mocked(a.send).mockClear(); vi.mocked(b.send).mockClear();
+    await send(server, b, { type: "command", command: { type: "seek", seconds: 42 } });
+    expect(server.room.controlMode).toBe("commands");
+    expect(server.room.playback).toBe(actual);
+    expect(a.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: "player-command", protocol: PARTY_PROTOCOL,
+      outputId: "a", outputGeneration: generation, revision: 1, command: { type: "seek", seconds: 42 } }));
+    expect(b.send).not.toHaveBeenCalled();
+    await send(server, a, { type: "report", outputGeneration: generation, commandRevision: 1, playback: { ...playback, progress: 42 } });
+    expect(server.room.playback?.progress).toBe(42);
+  });
+  it("rejects snapshots predating a modern command or belonging to a previous output grant", async () => {
+    await send(server, a, { type: "hello", protocol: PARTY_PROTOCOL, name: "a", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    const generation = server.room.outputGeneration!;
+    await send(server, b, { type: "command", command: { type: "playing", value: false } });
+    const paused = { ...playback, isPlaying: false };
+    await send(server, a, { type: "report", outputGeneration: generation, commandRevision: 0, playback: paused });
+    await send(server, a, { type: "report", outputGeneration: generation - 1, commandRevision: 1, playback: paused });
+    expect(server.room.playback?.isPlaying).toBe(true);
+    await send(server, a, { type: "report", outputGeneration: generation, commandRevision: 1, playback: paused });
+    expect(server.room.playback?.isPlaying).toBe(false);
+  });
+  it("accepts native automatic transitions and keeps the next remote command relative to the real player", async () => {
+    await send(server, a, { type: "hello", protocol: PARTY_PROTOCOL, name: "a", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, a, { type: "report", outputGeneration: server.room.outputGeneration, commandRevision: 0,
+      playback: { ...playback, currentIndex: 1, progress: 7 } });
+    await send(server, b, { type: "command", command: { type: "next" } });
+    expect(server.room.playback).toMatchObject({ currentIndex: 1, progress: 7, isPlaying: true });
+    expect(a.send).toHaveBeenLastCalledWith(expect.stringContaining('"command":{"type":"next"}'));
+  });
+  it("queues remote controls through handoff and sends each once to the newly granted output", async () => {
+    await send(server, b, { type: "hello", protocol: PARTY_PROTOCOL, name: "b", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b" });
+    vi.mocked(b.send).mockClear();
+    await send(server, c, { type: "command", command: { type: "seek", seconds: 30 } });
+    await send(server, c, { type: "command", command: { type: "playing", value: false } });
+    expect(b.send).not.toHaveBeenCalled();
+    expect(server.room.playback?.isPlaying).toBe(true);
+    await send(server, a, { type: "released", revision: server.room.revision });
+    const messages = vi.mocked(b.send).mock.calls.map(([raw]) => JSON.parse(raw as string));
+    expect(messages.map(m => [m.revision, m.command])).toEqual([[1, { type: "seek", seconds: 30 }], [2, { type: "playing", value: false }]]);
+    expect(messages.every(m => m.outputGeneration === server.room.outputGeneration)).toBe(true);
+    expect(server.pendingCommands).toEqual([]);
+    expect(server.room.playback?.isPlaying).toBe(true);
+    await send(server, b, { type: "report", outputGeneration: server.room.outputGeneration, commandRevision: 2,
+      playback: { ...playback, progress: 30, isPlaying: false } });
+    expect(server.room.playback).toMatchObject({ progress: 30, isPlaying: false });
+  });
+  it("resets command acknowledgements on a new output generation", async () => {
+    for (const conn of [a, b]) await send(server, conn, { type: "hello", protocol: PARTY_PROTOCOL, name: conn.id, commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, c, { type: "command", command: { type: "next" } });
+    const previousGeneration = server.room.outputGeneration!;
+    await send(server, b, { type: "output", id: "b" });
+    await send(server, a, { type: "released", revision: server.room.revision });
+    expect(server.room.outputGeneration).toBeGreaterThan(previousGeneration);
+    expect(server.room.commandRevision).toBe(0);
+    await send(server, b, { type: "report", outputGeneration: server.room.outputGeneration, commandRevision: 0,
+      playback: { ...playback, progress: 64 } });
+    expect(server.room.playback?.progress).toBe(64);
+  });
+  it("adopts a continuing local player when rejoining a room with no active output", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await server.onClose(a);
+    expect(server.room.playback?.isPlaying).toBe(false);
+    await send(server, b, { type: "hello", protocol: PARTY_PROTOCOL, name: "b", commands: true });
+    await send(server, b, { type: "output", id: "b", seed: { ...playback, currentIndex: 2, progress: 41, isPlaying: true } });
+    expect(server.room.playback).toMatchObject({ currentIndex: 2, progress: 41, isPlaying: true });
+  });
+  it("keeps a live output's snapshot during handoff despite a controller's stale local seed", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b", seed: { ...playback, currentIndex: 2, isPlaying: false } });
+    expect(server.room.playback).toMatchObject({ currentIndex: 0, isPlaying: true });
+  });
+  it("lets a reconnected output relinquish only its Party session immediately", async () => {
+    await send(server, a, { type: "hello", protocol: PARTY_PROTOCOL, name: "a", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "detach" });
+    expect(server.room.outputId).toBe("a");
+    await send(server, a, { type: "detach" });
+    expect(server.room.outputId).toBeNull();
+    expect(server.room.pendingOutputId).toBeNull();
+    expect(server.releasing).toBeNull();
+    expect(server.devices.has("a")).toBe(true);
+    expect(server.room.playback?.isPlaying).toBe(false);
+  });
   it("exposes a public health check without exposing room data", async () => {
     const response = await worker.fetch(new Request("https://worker/health"), { PARTY_TOKEN_SECRET: "configured" });
     expect(response.status).toBe(200);
