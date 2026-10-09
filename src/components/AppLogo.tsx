@@ -20,6 +20,7 @@ export function AppLogo({
       // Rounded like an iOS app icon rather than a full circle, which would crop the D.
       className={clsx("rounded-[22.5%]", className)}
       priority
+      unoptimized
     />
   );
 }

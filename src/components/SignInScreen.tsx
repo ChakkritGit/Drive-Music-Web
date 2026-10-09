@@ -4,7 +4,7 @@ import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { AppLogo } from "@/components/AppLogo";
 
-export function SignInScreen() {
+export function SignInScreen({ isOffline = false }: { isOffline?: boolean }) {
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
@@ -21,10 +21,12 @@ export function SignInScreen() {
         </p>
         <button
           onClick={() => signIn("google")}
-          className="mt-6 h-11 w-full rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent/85 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+          disabled={isOffline}
+          className="mt-6 h-11 w-full rounded-full bg-accent px-5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent/85 focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:opacity-50"
         >
           Sign in with Google
         </button>
+        {isOffline && <p role="status" className="mt-3 text-xs text-zinc-500">Reconnect to sign in with Google.</p>}
         <p className="mt-4 text-[11px] text-zinc-500">
           By continuing, you agree to the{" "}
           <Link href="/terms" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">

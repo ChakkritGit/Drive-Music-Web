@@ -3,9 +3,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import usePartySocket from "partysocket/react";
+import { useAppAccess } from "@/components/AppAccessContext";
 import { SharedPlayerProvider, usePlayer, type PlayerContextValue } from "@/components/PlayerContext";
 import { useToast } from "@/components/ToastContext";
-import { HEARTBEAT_MS, PARTY_PROTOCOL, leaseDeadline, playbackDisplay, upcoming, validPlayerCommand, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
+import { HEARTBEAT_MS, PARTY_PROTOCOL, leaseDeadline, playbackDisplay, positionAt, upcoming, validPlayerCommand, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
 
 interface SyncContextValue {
   devices: PartyRoom["devices"];
@@ -31,7 +32,10 @@ function deviceName() {
   return `${browser} on ${os}`;
 }
 async function fetchToken(): Promise<{ token: string; roomId: string } | null> {
-  try { const r = await fetch("/api/sync-token", { cache: "no-store" }); return r.ok ? await r.json() : null; } catch { return null; }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try { const r = await fetch("/api/sync-token", { cache: "no-store", signal: controller.signal }); return r.ok ? await r.json() : null; } catch { return null; }
+  finally { clearTimeout(timeout); }
 }
 function snapshot(p: PlayerContextValue): PartyPlayback | null {
   if (!p.currentFile || p.currentIndex === null) return null;
@@ -44,6 +48,7 @@ function snapshot(p: PlayerContextValue): PartyPlayback | null {
 }
 export function SyncProvider({ children }: { children: React.ReactNode }) {
   const { status, data: session } = useSession();
+  const { isOffline, isSignedOut } = useAppAccess();
   const player = usePlayer();
   const { showToast } = useToast();
   const available = Boolean(process.env.NEXT_PUBLIC_PARTYKIT_HOST);
@@ -56,6 +61,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [detached, setDetached] = useState(false);
   const detachedRef = useRef(false);
   const adoptLocalRef = useRef(false);
+  const selectingHereRef = useRef(false);
+  const selectionAcknowledgedRef = useRef(false);
   const acquired = useRef<{ generation: number; commandRevision: number; hydrationRevision: number | null; executionTick: number | null } | null>(null);
   const pendingCommands = useRef<{ generation: number; revision: number; command: PartyCommand }[]>([]);
   const [commandTick, setCommandTick] = useState(0);
@@ -92,7 +99,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!available || status !== "authenticated") return;
+    if (!available || status !== "authenticated" || isOffline || isSignedOut) return;
     let cancelled = false;
     const resolve = async () => {
       const result = await fetchToken();
@@ -100,23 +107,24 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     };
     void resolve();
     const timer = setInterval(resolve, 30000);
-    return () => { cancelled = true; clearInterval(timer); setRoomId(null); setRoom(null); roomRef.current = null; silence(); };
-  }, [available, status, session?.user?.email, silence]);
+    return () => { cancelled = true; clearInterval(timer); detach(); setRoomId(null); setRoom(null); roomRef.current = null; setConnected(false); };
+  }, [available, status, session?.user?.email, detach, isOffline, isSignedOut]);
 
   const socket = usePartySocket({
     host: process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "",
     party: "sync-server", room: roomId ?? "unset",
-    enabled: available && status === "authenticated" && !!roomId,
+    enabled: available && status === "authenticated" && !!roomId && !isOffline && !isSignedOut,
     query: async () => ({ token: (await fetchToken())?.token ?? "" }),
     onOpen(event) {
       // IDs belong to this PartySocket instance: separate tabs, stable across reconnects.
       (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, name: deviceName(), commands: true }));
     },
-    onClose() { setConnected(false); detach(); },
-    onError() { setConnected(false); detach(); },
+    onClose() { selectingHereRef.current = false; setConnected(false); detach(); },
+    onError() { selectingHereRef.current = false; setConnected(false); detach(); },
     // This callback runs on websocket events, never during render.
     /* eslint-disable react-hooks/purity */
     onMessage(event) {
+      if (isOffline || isSignedOut) return;
       if (typeof event.data !== "string") return;
       let m;
       try { m = JSON.parse(event.data); } catch { return; }
@@ -132,6 +140,21 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         }
         const previousOutput = roomRef.current?.outputId;
         roomRef.current = m; setRoom(m);
+        if (selectingHereRef.current && m.pendingOutputId === idRef.current) selectionAcknowledgedRef.current = true;
+        if (selectingHereRef.current && selectionAcknowledgedRef.current && ((m.pendingOutputId && m.pendingOutputId !== idRef.current)
+          || (m.outputId && m.outputId !== idRef.current && m.outputId !== previousOutput))) {
+          // A newer explicit device selection supersedes this takeover. Its grant
+          // must not leave this device playing or accidentally rejoin it later.
+          selectingHereRef.current = false;
+          adoptLocalRef.current = false;
+          detachedRef.current = false; setDetached(false);
+          silence();
+        }
+        if (m.outputId === idRef.current && selectingHereRef.current) {
+          selectingHereRef.current = false;
+          detachedRef.current = false; setDetached(false);
+          adoptLocalRef.current = true;
+        }
         if (m.outputId !== idRef.current) {
           if (previousOutput === idRef.current && !m.outputId && !m.pendingOutputId) detach();
           else if (!detachedRef.current && (!adoptLocalRef.current || m.pendingOutputId)) {
@@ -143,7 +166,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
           socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
         }
       } else if (validPlayerCommand(m) && m.outputId === idRef.current) {
-        if (detachedRef.current) return;
+        // The worker can flush queued controls before its grant snapshot arrives.
+        // Keep those controls while an explicit local takeover is still pending.
+        if (detachedRef.current && !selectingHereRef.current) return;
         const owner = acquired.current;
         if (owner && owner.generation === m.outputGeneration && m.revision <= owner.commandRevision) return;
         if (!pendingCommands.current.some(c => c.generation === m.outputGeneration && c.revision === m.revision)) {
@@ -154,6 +179,13 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         && roomRef.current?.outputId === idRef.current) {
         const until = leaseDeadline(m.sent, m.leaseMs);
         if (until <= performance.now() || until < leaseUntil.current) return;
+        if (selectingHereRef.current) {
+          // Selecting an output already granted to this device is idempotent on
+          // the worker, so its lease can be the only confirmation we receive.
+          selectingHereRef.current = false;
+          detachedRef.current = false; setDetached(false);
+          adoptLocalRef.current = true;
+        }
         leaseUntil.current = until;
         if (leaseTimer.current) clearTimeout(leaseTimer.current);
         leaseTimer.current = setTimeout(() => {
@@ -168,6 +200,17 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     },
     /* eslint-enable react-hooks/purity */
   });
+  useEffect(() => {
+    if (isSignedOut) {
+      selectingHereRef.current = false;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize explicit logout with the external audio transport and socket
+      silence("Signed out");
+      socket.close(1000, "Signed out");
+    } else if (isOffline) {
+      detach();
+      socket.close(1000, "Offline playback");
+    }
+  }, [isOffline, isSignedOut, detach, silence, socket]);
   useEffect(() => {
     if (!available) return;
     const leave = () => {
@@ -204,6 +247,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     return () => { clearInterval(timer); if (leaseTimer.current) clearTimeout(leaseTimer.current); };
   }, []);
   const command = useCallback((value: PartyCommand) => {
+    if (isSignedOut) return;
     const current = roomRef.current;
     const local = detachedRef.current || !connected || !current?.outputId || current.outputId === idRef.current;
     if (local && (!current?.pendingOutputId || detachedRef.current || !connected)) {
@@ -223,21 +267,46 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     }
     if (!connected || socket.readyState !== WebSocket.OPEN) { showToast("Reconnect to Party Play to control another device."); return; }
     socket.send(JSON.stringify({ type: "command", command: value }));
-  }, [connected, socket, showToast]);
+  }, [connected, socket, showToast, isSignedOut]);
   const setPartyCommandHandler = player.setPartyCommandHandler;
   useEffect(() => {
     setPartyCommandHandler(available ? command : null);
     return () => setPartyCommandHandler(null);
   }, [available, command, setPartyCommandHandler]);
   const selectOutput = useCallback((id: string) => {
-    if (!connected || socket.readyState !== WebSocket.OPEN) return;
+    if (isSignedOut) return;
+    const here = id === idRef.current || id === "__local__";
+    if (here) {
+      const current = roomRef.current;
+      if (current?.outputId === idRef.current && acquired.current && !detachedRef.current) { playerRef.current.unlockAudio(); return; }
+      const remote = current?.playback;
+      const alreadyLocal = detachedRef.current || current?.outputId === idRef.current;
+      const seed = alreadyLocal ? snapshot(playerRef.current)
+        : remote ? { ...remote, progress: positionAt(remote, Date.now()), updatedAt: Date.now() } : snapshot(playerRef.current);
+      playerRef.current.unlockAudio();
+      detach();
+      detachedRef.current = true; setDetached(true);
+      playerRef.current.setOutputMuted(false);
+      playerRef.current.setPartyLeaseRequired(false);
+      // Start cached audio in this gesture. Party confirmation later adopts the
+      // running transport, rather than leaving Play blocked on another socket.
+      if (seed && !alreadyLocal && !selectingHereRef.current) playerRef.current.applyPartyPlayback(seed, current?.revision ?? 0);
+      if (connected && socket.readyState === WebSocket.OPEN && idRef.current && !isOffline) {
+        if (!selectingHereRef.current) selectionAcknowledgedRef.current = false;
+        selectingHereRef.current = true;
+        adoptLocalRef.current = true;
+        socket.send(JSON.stringify({ type: "output", id: idRef.current, seed, adoptLocal: true }));
+      }
+      return;
+    }
+    if (!connected || socket.readyState !== WebSocket.OPEN || isOffline) return;
     const seed = snapshot(playerRef.current);
-    adoptLocalRef.current = id === idRef.current && !roomRef.current?.outputId && !roomRef.current?.pendingOutputId;
+    selectingHereRef.current = false;
+    adoptLocalRef.current = false;
     detachedRef.current = false; setDetached(false);
-    if (id === idRef.current) playerRef.current.unlockAudio();
-    else silence("Output selected on another device");
+    silence("Output selected on another device");
     socket.send(JSON.stringify({ type: "output", id, seed }));
-  }, [connected, socket, silence]);
+  }, [connected, socket, silence, detach, isOffline, isSignedOut]);
 
   useEffect(() => {
     if (!available) { playerRef.current.setOutputMuted(false); return; }

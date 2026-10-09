@@ -207,6 +207,15 @@ afterEach(async () => {
 });
 
 describe("playback across media events", () => {
+  it("starts a downloaded track even while reading the full offline library is stalled", async () => {
+    database.listCachedTracks.mockImplementation(() => new Promise(() => {}));
+    await mount();
+    expect(player.isLoading).toBe(false);
+    expect(player.cachedTracks.has("first")).toBe(true);
+    expect(slots()[0].src).toContain("blob:");
+    expect(slots()[0].paused).toBe(false);
+  });
+
   it("seeks the native player directly while a Party controller is installed", async () => {
     await mount();
     const partyCommand = vi.fn();

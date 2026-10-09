@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { Folder, Loader2 } from "lucide-react";
 import { isFolder, listFolder } from "@/lib/drive";
 import type { DriveFile } from "@/types";
 import { TrackRow } from "@/components/TrackRow";
 import { DownloadAllButton } from "@/components/DownloadAllButton";
 import { usePlayer } from "@/components/PlayerContext";
-import { EmptyState, PAGE, PageHeader } from "@/components/ui";
+import { EmptyState, PAGE, PILL_PRIMARY, PageHeader } from "@/components/ui";
+import { useAppAccess } from "@/components/AppAccessContext";
 
 interface Crumb {
   id: string;
@@ -19,6 +21,7 @@ const ROOT_CRUMB: Crumb = { id: "root", name: "My Drive" };
 
 export function DriveBrowser() {
   const { data: session } = useSession();
+  const { isOffline } = useAppAccess();
   const { cachedTracks } = usePlayer();
   const [stack, setStack] = useState<Crumb[]>([ROOT_CRUMB]);
   const [items, setItems] = useState<DriveFile[]>([]);
@@ -28,7 +31,7 @@ export function DriveBrowser() {
   const current = stack[stack.length - 1];
 
   useEffect(() => {
-    if (!session?.accessToken) return;
+    if (!session?.accessToken || isOffline) return;
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: mark loading before the fetch starts
     setLoading(true);
@@ -48,10 +51,21 @@ export function DriveBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [session?.accessToken, current.id]);
+  }, [session?.accessToken, current.id, isOffline]);
 
   const audioFiles = items.filter((f) => !isFolder(f));
   const audioIndex = new Map(audioFiles.map((f, i) => [f.id, i]));
+
+  if (isOffline) {
+    return (
+      <div className={PAGE}>
+        <PageHeader eyebrow="Google Drive" title="My Drive" />
+        <EmptyState action={<Link href="/library" className={PILL_PRIMARY}>Open downloaded music</Link>}>
+          Connect to the internet to browse Google Drive. Downloaded tracks are available in your offline library.
+        </EmptyState>
+      </div>
+    );
+  }
 
   return (
     <div className={PAGE}>

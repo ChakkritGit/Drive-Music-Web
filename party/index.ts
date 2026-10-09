@@ -1,7 +1,7 @@
 import { Server, routePartykitRequest, type Connection } from "partyserver";
 import { jwtVerify } from "jose";
 import type { SyncTokenPayload } from "../src/lib/sync";
-import { HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validPlayback, type PartyCommand, type PartyRoom } from "../src/lib/party";
+import { HANDOFF_MS, HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validPlayback, type PartyCommand, type PartyPlayback, type PartyRoom } from "../src/lib/party";
 
 interface Env { PARTY_TOKEN_SECRET: string }
 type Device = { name: string; seen: number; leaseUntil: number; connection: Connection | null; commands: boolean };
@@ -12,6 +12,7 @@ export class SyncServer extends Server<Env> {
   room: PartyRoom = { type: "room", protocol: PARTY_PROTOCOL, revision: 0, transportRevision: 0, positionRevision: 0, controlMode: "snapshots", commandRevision: 0, outputGeneration: 0, devices: [], outputId: null, pendingOutputId: null, playback: null };
   releasing: { id: string; until: number } | null = null;
   pendingCommands: PartyCommand[] = [];
+  pendingLocalPlayback: PartyPlayback | null = null;
 
   async onStart() {
     const playback = await this.ctx.storage.get<unknown>("playback");
@@ -27,19 +28,27 @@ export class SyncServer extends Server<Env> {
     this.broadcast(JSON.stringify({ ...this.room, serverTime: Date.now() }));
     if (this.room.playback) await this.ctx.storage.put("playback", this.room.playback);
     if (this.devices.size || this.releasing) {
-      const next = Date.now() + HEARTBEAT_MS;
+      const next = Math.min(Date.now() + HEARTBEAT_MS, this.releasing?.until ?? Infinity);
       const scheduled = await this.ctx.storage.getAlarm();
       // Playback reports arrive more often than the alarm interval. Moving the alarm on
       // every publish would postpone heartbeats (and dead-output recovery) indefinitely.
       if (scheduled === null || scheduled > next) await this.ctx.storage.setAlarm(next);
     }
   }
-  async selectOutput(id: string | null) {
+  async selectOutput(id: string | null, localPlayback?: PartyPlayback) {
     if (id === this.room.outputId && !this.releasing) return;
+    // A retry during a slow connection cannot restart the transfer or invalidate
+    // controls already queued for this target.
+    if (this.releasing && id === this.room.pendingOutputId) {
+      if (localPlayback) this.pendingLocalPlayback = localPlayback;
+      return;
+    }
     if (id !== this.room.pendingOutputId) this.pendingCommands = [];
+    this.pendingLocalPlayback = localPlayback ?? null;
     if (this.room.playback) this.room.playback = { ...this.room.playback, progress: this.releasing ? this.room.playback.progress : positionAt(this.room.playback, Date.now()), updatedAt: Date.now() };
     if (this.room.outputId) {
-      this.releasing = { id: this.room.outputId, until: this.devices.get(this.room.outputId)?.leaseUntil ?? Date.now() };
+      this.releasing = { id: this.room.outputId,
+        until: Math.min(this.devices.get(this.room.outputId)?.leaseUntil ?? Date.now(), Date.now() + HANDOFF_MS) };
     }
     this.room.outputId = null;
     this.room.pendingOutputId = id;
@@ -50,6 +59,11 @@ export class SyncServer extends Server<Env> {
   finishHandoff() {
     const next = this.room.pendingOutputId;
     this.room.outputId = next && this.devices.get(next)?.connection ? next : null;
+    // Selecting this device may already have started its local player while the
+    // old output acknowledges. Adopt its seed once; do not restart it from the
+    // previous output's delayed mirror when the grant arrives.
+    if (this.room.outputId && this.pendingLocalPlayback) this.room.playback = this.pendingLocalPlayback;
+    this.pendingLocalPlayback = null;
     if (this.room.outputId) this.devices.get(this.room.outputId)!.leaseUntil = Date.now() + LEASE_MS;
     this.room.pendingOutputId = null;
     this.releasing = null;
@@ -116,7 +130,11 @@ export class SyncServer extends Server<Env> {
       await this.publish();
     } else if (m.type === "output" && typeof m.id === "string" && this.devices.get(m.id)?.connection) {
       if ((!this.room.playback || (!this.room.outputId && !this.room.pendingOutputId)) && validPlayback(m.seed)) this.room.playback = { ...m.seed, updatedAt: now };
-      await this.selectOutput(m.id);
+      // Only a device adopting its own running main player can supersede the
+      // mirror. Ordinary controllers keep the current output's shared queue.
+      const localPlayback = m.adoptLocal === true && m.id === connection.id && validPlayback(m.seed)
+        ? { ...m.seed, updatedAt: now } : undefined;
+      await this.selectOutput(m.id, localPlayback);
     } else if (m.type === "released" && this.releasing?.id === connection.id && m.revision === this.room.revision) {
       this.finishHandoff();
       await this.publish();
@@ -169,7 +187,7 @@ export class SyncServer extends Server<Env> {
     }
     if (this.releasing && now >= this.releasing.until) { this.finishHandoff(); changed = true; }
     if (changed) await this.publish();
-    else if (this.devices.size || this.releasing) await this.ctx.storage.setAlarm(now + HEARTBEAT_MS);
+    else if (this.devices.size || this.releasing) await this.ctx.storage.setAlarm(Math.min(now + HEARTBEAT_MS, this.releasing?.until ?? Infinity));
   }
 }
 

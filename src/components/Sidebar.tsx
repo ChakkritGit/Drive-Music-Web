@@ -3,17 +3,17 @@
 import { canViewAnalytics } from "@/lib/admin";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession, signOut } from "next-auth/react";
 import { Gauge, Heart, ListMusic, LogOut, Plus, Settings } from "lucide-react";
 import clsx from "clsx";
 import { AppLogo } from "@/components/AppLogo";
 import { NAV_ITEMS } from "@/components/nav";
 import { FAVORITES_PLAYLIST_NAME, usePlaylists } from "@/components/PlaylistsContext";
+import { useAppAccess } from "@/components/AppAccessContext";
 
 /** The desktop navigation: where to go, the user's playlists, and the account. Hidden under `lg`. */
 export function Sidebar() {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { session, signOut } = useAppAccess();
   const { playlists } = usePlaylists();
   const favorites = playlists.find((p) => p.name === FAVORITES_PLAYLIST_NAME);
   const others = playlists.filter((p) => p !== favorites);
@@ -73,7 +73,7 @@ export function Sidebar() {
           ) : (
             <span className="h-7 w-7 shrink-0 rounded-full bg-zinc-200 dark:bg-zinc-800" />
           )}
-          <span className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-300">{session?.user?.name}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-300">{session?.user?.name ?? "Offline library"}</span>
           <button
             onClick={() => signOut()}
             aria-label="Sign out"

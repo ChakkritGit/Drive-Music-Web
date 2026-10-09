@@ -20,6 +20,12 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+        ],
+      },
+      {
         source: "/(.*)",
         // No CSP on purpose: the app loads Google thumbnails and avatars and talks to a
         // PartyKit host from env, and a wrong policy would silently break playback.

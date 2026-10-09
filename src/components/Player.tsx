@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { useAppAccess } from "@/components/AppAccessContext";
 import {
   ListMusic,
   Music,
@@ -67,7 +67,7 @@ export function Player() {
   } = usePlayer();
   const { outputName, outputId, deviceId, pendingOutputId, localPlayback } = useSync();
   const pathname = usePathname();
-  const { status } = useSession();
+  const { canAccessApp } = useAppAccess();
   // The mobile bottom tab nav (see app/(app)/layout.tsx) renders only for routes inside that
   // route group (home/browse/playlists/library) once signed in — /admin, /settings, /privacy,
   // /terms, and any other standalone route are all outside it and never get one. Checked as an
@@ -79,7 +79,7 @@ export function Player() {
   // responsible for clearing the gesture area there; when the nav is present, this bar instead
   // sits just above it, which already clears it.
   const hasBottomNav =
-    status === "authenticated" &&
+    canAccessApp &&
     APP_GROUP_ROUTES.some(
       (route) => pathname === route || pathname.startsWith(`${route}/`),
     );

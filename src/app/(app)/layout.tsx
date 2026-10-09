@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useRef, useState } from "react";
-import { useSession, signIn, signOut } from "next-auth/react";
+import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Settings, LogOut, User } from "lucide-react";
@@ -12,11 +12,13 @@ import { PolicyLinks } from "@/components/PolicyLinks";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 import { NAV_ITEMS } from "@/components/nav";
+import { useAppAccess } from "@/components/AppAccessContext";
+import { LibraryView } from "@/components/LibraryView";
 
 // PlayerProvider/PlaylistsProvider and the persistent Player/FullPlayer are mounted globally
 // in Providers.tsx (above the router), so playback survives navigating to /admin and back.
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const { data: session, status } = useSession();
+  const { session, status, canAccessApp, localOnly, isOffline, isSignedOut, signOut } = useAppAccess();
   const pathname = usePathname();
 
   const [profileOpen, setProfileOpen] = useState(false);
@@ -45,7 +47,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // on *every* load, including already-signed-in ones — so unlike the signed-out case, it
   // can't look like a "Sign in with Google" prompt, or it'd flash a misleading CTA at people
   // who are already signed in.
-  if (status === "loading") {
+  if (status === "loading" && !canAccessApp && !isSignedOut) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
         <AppLogo size={56} />
@@ -70,15 +72,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!session) {
-    return <SignInScreen />;
+  if (!canAccessApp) {
+    return <SignInScreen isOffline={isOffline} />;
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Sidebar />
       <div className="app-content flex min-h-0 flex-1 flex-col transition-[padding] duration-200 lg:pl-60">
-        {session.error === "RefreshAccessTokenError" && (
+        {isOffline && (
+          <div role="status" className="bg-zinc-100 px-6 py-2 text-center text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+            Connection unavailable. Downloaded music plays on this device.
+          </div>
+        )}
+        {session?.error === "RefreshAccessTokenError" && !isOffline && (
           <div className="bg-amber-50 px-6 py-2 text-center text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
             Your Google session expired.{" "}
             <button onClick={() => signIn("google")} className="underline">
@@ -109,7 +116,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </Link>
             <div className="relative">
               <button onClick={() => setProfileOpen(v => !v)} aria-label="Profile" aria-expanded={profileOpen} className="grid h-10 w-10 place-items-center rounded-full">
-                {session.user?.image ? (
+                {session?.user?.image ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={session.user.image} alt="" className="h-7 w-7 rounded-full" />
                 ) : <User className="h-5 w-5" />}
@@ -117,8 +124,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {profileOpen && <>
                 <button className="fixed inset-0 z-40" aria-label="Close profile" onClick={() => setProfileOpen(false)} />
                 <div className="absolute top-full right-0 z-50 w-64 rounded-xl border border-zinc-200 bg-white p-3 shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-                  <p className="truncate text-sm font-medium">{session.user?.name}</p>
-                  <p className="mt-1 truncate text-xs text-zinc-500">{session.user?.email}</p>
+                  <p className="truncate text-sm font-medium">{session?.user?.name ?? "Offline library"}</p>
+                  <p className="mt-1 truncate text-xs text-zinc-500">{session?.user?.email ?? "Downloaded music on this device"}</p>
                   <button onClick={() => signOut()} className="mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
                     <LogOut className="h-4 w-4" /> Sign out
                   </button>
@@ -140,7 +147,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         >
           {/* Keyed by the path, so each page change plays the entrance. */}
           <div key={pathname} className="page-in">
-            {children}
+            {localOnly ? <Suspense><LibraryView /></Suspense> : children}
           </div>
         </main>
       </div>

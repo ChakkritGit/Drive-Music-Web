@@ -8,7 +8,7 @@ vi.mock("partyserver", () => ({
   routePartykitRequest: vi.fn(async () => null),
 }));
 import worker, { SyncServer } from "./index";
-import { LEASE_MS, PARTY_PROTOCOL, canPreservePosition, reducePlayback } from "../src/lib/party";
+import { HANDOFF_MS, LEASE_MS, PARTY_PROTOCOL, canPreservePosition, reducePlayback } from "../src/lib/party";
 import type { Connection } from "partyserver";
 const connection = (id: string) => ({ id, send: vi.fn(), close: vi.fn() }) as unknown as Connection;
 const playback = reducePlayback(null, { type: "play", queue: ["a", "b", "c"].map(id => ({ id, name: id, mimeType: "audio/mpeg" })), index: 0 }, 1000)!;
@@ -58,14 +58,67 @@ describe("Party room", () => {
     await send(server, a, { type: "heartbeat", sent: 42 });
     expect(a.send).toHaveBeenLastCalledWith(expect.stringContaining('"granted":false'));
   });
-  it("waits for lease expiry before recovering an unresponsive output", async () => {
+  it("transfers an unresponsive output after a short handoff deadline without waiting for its lease", async () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
     await send(server, b, { type: "output", id: "b" });
-    vi.setSystemTime(1000 + LEASE_MS - 1);
+    expect(server.releasing?.until).toBe(1000 + HANDOFF_MS);
+    expect(server.devices.get("a")?.leaseUntil).toBe(1000 + LEASE_MS);
+    expect(server.storage.setAlarm).toHaveBeenLastCalledWith(1000 + HANDOFF_MS);
+    vi.setSystemTime(1000 + HANDOFF_MS - 1);
     await send(server, b, { type: "heartbeat", sent: 42 });
     await server.onAlarm(); expect(server.room.outputId).toBeNull();
-    vi.setSystemTime(1000 + LEASE_MS + 1);
+    expect(server.storage.setAlarm).toHaveBeenLastCalledWith(1000 + HANDOFF_MS);
+    vi.setSystemTime(1000 + HANDOFF_MS);
     await server.onAlarm(); expect(server.room.outputId).toBe("b");
+    expect(server.devices.has("a")).toBe(true);
+    expect(server.room.playback?.isPlaying).toBe(true);
+  });
+  it("does not extend a pending handoff or discard its commands when output selection is retried", async () => {
+    await send(server, b, { type: "hello", protocol: PARTY_PROTOCOL, name: "b", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b" });
+    const revision = server.room.revision;
+    const deadline = server.releasing?.until;
+    await send(server, c, { type: "command", command: { type: "seek", seconds: 30 } });
+    vi.setSystemTime(1000 + HANDOFF_MS - 200);
+    await send(server, b, { type: "output", id: "b" });
+    expect(server.room.revision).toBe(revision);
+    expect(server.releasing?.until).toBe(deadline);
+    expect(server.pendingCommands).toEqual([{ type: "seek", seconds: 30 }]);
+    vi.setSystemTime(1000 + HANDOFF_MS);
+    await server.onAlarm();
+    const commands = vi.mocked(b.send).mock.calls.map(([raw]) => JSON.parse(raw as string)).filter(m => m.type === "player-command");
+    expect(server.room.outputId).toBe("b");
+    expect(commands).toHaveLength(1);
+    expect(commands[0].command).toEqual({ type: "seek", seconds: 30 });
+  });
+  it("grants only the latest target without extending the original deadline", async () => {
+    await send(server, c, { type: "hello", protocol: PARTY_PROTOCOL, name: "c", commands: true });
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b" });
+    const staleRevision = server.room.revision;
+    const deadline = server.releasing?.until;
+    await send(server, b, { type: "command", command: { type: "seek", seconds: 30 } });
+    vi.setSystemTime(1000 + HANDOFF_MS - 200);
+    await send(server, c, { type: "output", id: "c" });
+    expect(server.releasing?.until).toBe(deadline);
+    expect(server.pendingCommands).toEqual([]);
+    await send(server, a, { type: "released", revision: staleRevision });
+    expect(server.room.outputId).toBeNull();
+    await send(server, b, { type: "command", command: { type: "playing", value: false } });
+    vi.setSystemTime(1000 + HANDOFF_MS);
+    await server.onAlarm();
+    expect(server.room.outputId).toBe("c");
+    expect(server.room.pendingOutputId).toBeNull();
+    const commands = vi.mocked(c.send).mock.calls.map(([raw]) => JSON.parse(raw as string)).filter(m => m.type === "player-command");
+    expect(commands).toHaveLength(1);
+    expect(commands[0].command).toEqual({ type: "playing", value: false });
+    const generation = server.room.outputGeneration;
+    await send(server, a, { type: "released", revision: staleRevision });
+    await send(server, a, { type: "report", revision: server.room.revision, playback: { ...playback, isPlaying: false } });
+    expect(server.room.outputId).toBe("c");
+    expect(server.room.outputGeneration).toBe(generation);
+    expect(server.room.playback?.isPlaying).toBe(true);
   });
   it("requests heartbeats independently of background browser timers", async () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
@@ -336,6 +389,28 @@ describe("Party room", () => {
     await send(server, a, { type: "output", id: "a", seed: playback });
     await send(server, b, { type: "output", id: "b", seed: { ...playback, currentIndex: 2, isPlaying: false } });
     expect(server.room.playback).toMatchObject({ currentIndex: 0, isPlaying: true });
+  });
+  it("adopts an explicitly started local player when its delayed handoff grant completes", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b", adoptLocal: true,
+      seed: { ...playback, currentIndex: 2, progress: 41, isPlaying: true } });
+    expect(server.room.playback).toMatchObject({ currentIndex: 0, progress: 0 });
+    vi.setSystemTime(1000 + HANDOFF_MS);
+    await server.onAlarm();
+    expect(server.room.outputId).toBe("b");
+    expect(server.room.playback).toMatchObject({ currentIndex: 2, progress: 41, isPlaying: true });
+    expect(server.pendingLocalPlayback).toBeNull();
+  });
+  it("does not adopt another device's seed or a canceled target's local playback", async () => {
+    await send(server, a, { type: "output", id: "a", seed: playback });
+    await send(server, b, { type: "output", id: "b", adoptLocal: true,
+      seed: { ...playback, currentIndex: 2, progress: 41 } });
+    await send(server, b, { type: "output", id: "c", adoptLocal: true,
+      seed: { ...playback, currentIndex: 1, progress: 20 } });
+    vi.setSystemTime(1000 + HANDOFF_MS);
+    await server.onAlarm();
+    expect(server.room.outputId).toBe("c");
+    expect(server.room.playback).toMatchObject({ currentIndex: 0, progress: 0 });
   });
   it("lets a reconnected output relinquish only its Party session immediately", async () => {
     await send(server, a, { type: "hello", protocol: PARTY_PROTOCOL, name: "a", commands: true });

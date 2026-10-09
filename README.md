@@ -27,7 +27,7 @@ A personal music player that streams and caches audio straight from your own Goo
 - Playlists and Favorites
 - Drive folder browser with breadcrumbs
 - Offline library with search
-- Installable, offline-capable app shell (service worker)
+- Installable, offline-capable app shell (service worker); [offline listening](docs/offline-listening.md) works after reload without a network session check
 
 **Personalization**
 - A small neural net trained on-device from actual listening behavior
@@ -50,7 +50,7 @@ A personal music player that streams and caches audio straight from your own Goo
 - Web Audio API (dual `<audio>` element graph for crossfade, EQ, normalization, spatial audio, analyser)
 - IndexedDB for all local data — no server-side database
 - Google OAuth via NextAuth, `drive.readonly` scope only
-- [PartyKit](https://www.partykit.io) on Cloudflare for cross-device sync
+- PartyServer and PartySocket over Cloudflare Durable Object WebSockets for cross-device controls
 - Vitest for tests
 
 ## Getting started

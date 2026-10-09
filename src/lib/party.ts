@@ -2,8 +2,9 @@ import type { DriveFile, ParsedMetadata, PlaySource } from "../types";
 
 export const PARTY_PROTOCOL = 2;
 // Leave room for minute-batched background timers and a brief network reconnect.
-// A responsive handoff still completes immediately after the old output acknowledges it.
+// Explicit output selection has its own short deadline and never waits this long.
 export const LEASE_MS = 90_000;
+export const HANDOFF_MS = 2000;
 export const LEGACY_LEASE_MS = 9000;
 export const HEARTBEAT_MS = 2500;
 export function leaseDeadline(sent: number, leaseMs: unknown): number {

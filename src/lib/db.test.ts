@@ -4,6 +4,7 @@ import {
   addTrackToPlaylist,
   claimForAccount,
   clearAllData,
+  hasCachedTracks,
   createPlaylist,
   deleteCachedTrack,
   deletePlaylist,
@@ -300,6 +301,7 @@ describe("clearAllData", () => {
     await clearAllData();
 
     expect(await listCachedTracks()).toEqual([]);
+    expect(await hasCachedTracks()).toBe(false);
     expect(await listPlaylists()).toEqual([]);
     expect(await listRecentSources(50)).toEqual([]);
     expect((await loadModel()).trainingEvents).toBe(0);
@@ -346,6 +348,7 @@ describe("claimForAccount", () => {
     expect(await claimForAccount("acct-a")).toBe(false);
     expect(localStorage.getItem("drive-music-account")).toBe("acct-a");
     expect(await listCachedTracks()).toHaveLength(1);
+    expect(await hasCachedTracks()).toBe(true);
 
     expect(await claimForAccount("acct-a")).toBe(false);
     expect(await listCachedTracks()).toHaveLength(1);

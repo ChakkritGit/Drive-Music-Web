@@ -278,6 +278,7 @@ async function ensureCached(
   const cached = await getCachedTrack(file.id);
   if (cached) return cached;
 
+  if (!navigator.onLine) throw new Error("This track isn't downloaded. Choose a downloaded track in Library.");
   if (!accessToken) throw new Error("Not signed in");
   const blob = await downloadFileFresh(accessToken, file, async () => (await getSession())?.accessToken);
   const parsedMeta = await parseTrackMetadata(blob, file);
@@ -1480,8 +1481,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const track = await ensureCached(file, session?.accessToken);
-        await refreshCachedTracks();
         if (cancelled) return;
+        // Loading one track must not wait for every downloaded blob to be read from
+        // IndexedDB, especially when taking over playback on a large offline library.
+        setCachedTracks(previous => new Map(previous).set(track.fileId, track));
         // Only mark this file as "loaded" once it has actually succeeded — a failure (e.g. no
         // access token yet) must NOT set this, so a retry once the token resolves still runs.
         lastLoadedFileIdRef.current = file.id;
@@ -2282,8 +2285,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       void (async () => {
         try {
           const track = await ensureCached(targetFile, session?.accessToken);
-          await refreshCachedTracks();
           if (!isCurrent()) return;
+          setCachedTracks(previous => new Map(previous).set(track.fileId, track));
 
           // The incoming track's analysis is what supplies its mix-in point — where the
           // arrangement actually arrives — and without it the plan falls back to 0:00, which is
@@ -2365,7 +2368,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       getInactiveAudio,
       getGainNode,
       session,
-      refreshCachedTracks,
       ensureAnalysis,
       autoMixEnabled,
       beatmatchEnabled,

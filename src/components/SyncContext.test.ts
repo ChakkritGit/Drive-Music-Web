@@ -12,6 +12,8 @@ const socketMock = vi.hoisted(() => ({
   options: null as SocketOptions | null,
   socket: { readyState: 1, send: vi.fn(), close: vi.fn(), reconnect: vi.fn() },
 }));
+const accessMock = vi.hoisted(() => ({ isOffline: false, isSignedOut: false }));
+vi.mock("@/components/AppAccessContext", () => ({ useAppAccess: () => accessMock }));
 vi.mock("partysocket/react", () => ({ default: (options: SocketOptions) => {
   socketMock.options = options;
   return socketMock.socket;
@@ -105,6 +107,8 @@ function sent(type: string) {
   return socketMock.socket.send.mock.calls.map(([raw]) => JSON.parse(raw as string)).filter(m => m.type === type);
 }
 beforeEach(async () => {
+  accessMock.isOffline = false;
+  accessMock.isSignedOut = false;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubEnv("NEXT_PUBLIC_PARTYKIT_HOST", "example.test");
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ token: "test", roomId: "test" }) }));
@@ -122,6 +126,119 @@ afterEach(async () => {
 });
 
 describe("Party command bridge", () => {
+  it("starts the local player before a slow remote output releases and adopts its live time on grant", async () => {
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: "remote", playback: playback({ progress: 40, updatedAt: Date.now() - 1000 }) }));
+    hydrate.mockClear();
+    await act(async () => { sync.selectOutput("local"); });
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(local.isPlaying).toBe(true);
+    expect(local.progress).toBeGreaterThanOrEqual(41);
+    expect(sync.localPlayback).toBe(true);
+    expect(sent("output").at(-1)).toMatchObject({ id: "local", adoptLocal: true, seed: { isPlaying: true } });
+    await act(async () => { shared.seek(65); });
+    expect(local.progress).toBe(65);
+    expect(sent("command")).toEqual([]);
+    await message(room({ outputId: null, pendingOutputId: "local" }));
+    expect(local.isPlaying).toBe(true);
+    await message(room({ outputGeneration: 2, playback: playback({ progress: 41 }) }));
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(local.progress).toBe(65);
+    expect(sent("report").at(-1)).toMatchObject({ outputGeneration: 2, playback: { progress: 65, isPlaying: true } });
+  });
+
+  it("keeps cached playback on an offline event and allows selecting this device without a socket", async () => {
+    await acquire();
+    mute.mockClear();
+    accessMock.isOffline = true;
+    await act(async () => { setLocal({ progress: 33 }); });
+    expect(socketMock.socket.close).toHaveBeenCalledWith(1000, "Offline playback");
+    expect(mute.mock.calls.every(([muted]) => muted === false)).toBe(true);
+    expect(local.isPlaying).toBe(true);
+    socketMock.socket.readyState = 3;
+    socketMock.socket.send.mockClear();
+    await act(async () => { sync.selectOutput("__local__"); shared.seek(70); });
+    expect(local.progress).toBe(70);
+    expect(sync.localPlayback).toBe(true);
+    expect(sent("output")).toEqual([]);
+    expect(sent("command")).toEqual([]);
+  });
+
+  it("keeps controls flushed before a local takeover grant and executes them once after acquiring", async () => {
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: "remote" }));
+    await act(async () => { sync.selectOutput("local"); });
+    const queued = { type: "player-command", protocol: 2, outputId: "local", outputGeneration: 2,
+      revision: 1, command: { type: "seek", seconds: 77 } };
+    await message(queued);
+    await message(queued);
+    expect(execute).not.toHaveBeenCalled();
+    await message(room({ outputGeneration: 2, commandRevision: 1 }));
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    expect(execute).toHaveBeenCalledExactlyOnceWith({ type: "seek", seconds: 77 });
+    expect(local.progress).toBe(77);
+    expect(sent("report").at(-1)).toMatchObject({ outputGeneration: 2, commandRevision: 1, playback: { progress: 77 } });
+  });
+
+  it("silences audio on explicit sign out even while offline", async () => {
+    await acquire();
+    accessMock.isOffline = true;
+    accessMock.isSignedOut = true;
+    await act(async () => { setLocal({ progress: 33 }); });
+    expect(mute).toHaveBeenCalledWith(true, "Signed out");
+    expect(local.isPlaying).toBe(false);
+    expect(socketMock.socket.close).toHaveBeenCalledWith(1000, "Signed out");
+    execute.mockClear();
+    await act(async () => { shared.togglePlay(); sync.selectOutput("local"); });
+    expect(execute).not.toHaveBeenCalled();
+    expect(local.isPlaying).toBe(false);
+  });
+
+  it("confirms an already selected device on its lease without waiting for another room snapshot", async () => {
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room());
+    await act(async () => { sync.selectOutput("local"); });
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    await message({ type: "player-command", protocol: 2, outputId: "local", outputGeneration: 1,
+      revision: 1, command: { type: "seek", seconds: 77 } });
+    expect(execute).toHaveBeenCalledExactlyOnceWith({ type: "seek", seconds: 77 });
+    expect(local.progress).toBe(77);
+    expect(sent("report").at(-1)).toMatchObject({ outputGeneration: 1, commandRevision: 1 });
+  });
+
+  it("respects a newer device selection that supersedes a pending local takeover", async () => {
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: "remote" }));
+    await act(async () => { sync.selectOutput("local"); });
+    expect(local.isPlaying).toBe(true);
+    await message(room({ revision: 2, outputId: null, pendingOutputId: "local" }));
+    await message(room({ revision: 2, outputId: null, pendingOutputId: "third-device" }));
+    expect(local.isPlaying).toBe(false);
+    expect(sync.localPlayback).toBe(false);
+    await message(room({ revision: 3, outputId: "third-device", outputGeneration: 2 }));
+    execute.mockClear();
+    await act(async () => { shared.seek(88); });
+    expect(execute).not.toHaveBeenCalled();
+    expect(sent("command").at(-1)).toMatchObject({ command: { type: "seek", seconds: 88 } });
+  });
+
+  it("ignores delayed output snapshots sent before the local selection is acknowledged", async () => {
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: "remote" }));
+    await act(async () => { sync.selectOutput("local"); });
+    await message(room({ revision: 2, outputId: null, pendingOutputId: "third-device" }));
+    await message(room({ revision: 3, outputId: "third-device", pendingOutputId: null }));
+    expect(local.isPlaying).toBe(true);
+    expect(sync.localPlayback).toBe(true);
+    await message(room({ revision: 4, outputId: null, pendingOutputId: "local" }));
+    await message(room({ revision: 5, outputGeneration: 3 }));
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(local.isPlaying).toBe(true);
+    expect(sent("report").at(-1)).toMatchObject({ outputGeneration: 3 });
+  });
+
   it("hydrates once, then local seek and play controls run immediately without a network command", async () => {
     await acquire();
     expect(hydrate).toHaveBeenCalledTimes(1);

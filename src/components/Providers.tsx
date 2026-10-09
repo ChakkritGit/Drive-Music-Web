@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { SessionProvider } from "next-auth/react";
 import { ToastProvider } from "@/components/ToastContext";
 import { AccountGuard } from "@/components/AccountGuard";
+import { AppAccessProvider } from "@/components/AppAccessContext";
 import { PlayerProvider } from "@/components/PlayerContext";
 import { PlaylistsProvider } from "@/components/PlaylistsContext";
 import { SyncProvider } from "@/components/SyncContext";
@@ -15,7 +16,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
-        .register("/sw.js")
+        .register("/sw.js", { updateViaCache: "none" })
+        .then(async () => {
+          const registration = await navigator.serviceWorker.ready;
+          registration.active?.postMessage({ type: "drive-music-warm-offline" });
+        })
         .catch((err) =>
           console.error("Service worker registration failed", err),
         );
@@ -25,25 +30,27 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     // Refetched every 30 minutes, not only on tab focus: the Google token lasts an hour, and
     // music keeps playing while the tab is in the background.
-    <SessionProvider refetchInterval={30 * 60}>
-      <AccountGuard />
-      <ToastProvider>
-        {/* Player/Playlists state (and the actual <audio> element) live here, above every
-            route, so playback keeps going when navigating between pages (e.g. to /admin
-            and back) instead of being torn down and rebuilt each time. */}
-        <PlayerProvider>
-          {/* Needs usePlayer() (to broadcast local state and apply "Play here"), so it's
-              nested inside PlayerProvider rather than alongside it. */}
-          <SyncProvider>
-            <PlaylistsProvider>
-              {children}
-              <Player />
-              <FullPlayer />
-              <LoudnessAnalysisIndicator />
-            </PlaylistsProvider>
-          </SyncProvider>
-        </PlayerProvider>
-      </ToastProvider>
+    <SessionProvider refetchInterval={30 * 60} refetchWhenOffline={false}>
+      <AppAccessProvider>
+        <AccountGuard />
+        <ToastProvider>
+          {/* Player/Playlists state (and the actual <audio> element) live here, above every
+              route, so playback keeps going when navigating between pages (e.g. to /admin
+              and back) instead of being torn down and rebuilt each time. */}
+          <PlayerProvider>
+            {/* Needs usePlayer() (to broadcast local state and apply "Play here"), so it's
+                nested inside PlayerProvider rather than alongside it. */}
+            <SyncProvider>
+              <PlaylistsProvider>
+                {children}
+                <Player />
+                <FullPlayer />
+                <LoudnessAnalysisIndicator />
+              </PlaylistsProvider>
+            </SyncProvider>
+          </PlayerProvider>
+        </ToastProvider>
+      </AppAccessProvider>
     </SessionProvider>
   );
 }

@@ -166,6 +166,12 @@ export async function listCachedTracks(): Promise<CachedTrack[]> {
   return all.sort((a, b) => b.cachedAt - a.cachedAt);
 }
 
+/** Checks local music availability without loading every audio blob into memory. */
+export async function hasCachedTracks(): Promise<boolean> {
+  const db = await getDb();
+  return (await db.count(TRACKS_STORE)) > 0;
+}
+
 export async function isTrackCached(fileId: string): Promise<boolean> {
   const db = await getDb();
   const key = await db.getKey(TRACKS_STORE, fileId);
