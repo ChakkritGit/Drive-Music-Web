@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, canPreservePosition, playbackDisplay, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
+import { describeDevice, isQueueCommand, validDeviceKind, LEASE_MS, LEGACY_LEASE_MS, leaseDeadline, reducePlayback, canPreserveTransport, canPreservePosition, playbackDisplay, upcoming, validCommand, validPlayback, positionAt, type PartyRoom, type PartyPlayback } from "./party";
 import { canViewAnalytics } from "./admin";
 const files = ["a", "b", "c", "d"].map(id => ({ id, name: id, mimeType: "audio/mpeg" }));
 function state(): PartyPlayback { return reducePlayback(null, { type: "play", queue: files, index: 1 }, 1000)!; }
@@ -126,5 +126,41 @@ describe("shared playback", () => {
     expect(leaseDeadline(2000, Infinity)).toBe(2000 + LEGACY_LEASE_MS);
     expect(leaseDeadline(2000, LEASE_MS * 10)).toBe(2000 + LEASE_MS);
     expect(leaseDeadline(2000, 0)).toBe(2000);
+  });
+});
+
+describe("Spotify-style devices and remote volume", () => {
+  const UA = {
+    iphone: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+    ipad: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    android: "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
+    windows: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+  };
+  it("names the device and its kind", () => {
+    expect(describeDevice(UA.iphone)).toEqual({ name: "iPhone · Safari", kind: "phone" });
+    expect(describeDevice(UA.ipad, 5)).toEqual({ name: "iPad · Safari", kind: "tablet" }); // iPadOS reports a Mac
+    expect(describeDevice(UA.ipad, 0)).toEqual({ name: "Mac · Safari", kind: "computer" });
+    expect(describeDevice(UA.mac)).toEqual({ name: "Mac · Chrome", kind: "computer" });
+    expect(describeDevice(UA.android)).toEqual({ name: "Android phone · Chrome", kind: "phone" });
+    expect(describeDevice(UA.windows)).toEqual({ name: "Windows PC · Edge", kind: "computer" });
+    expect(validDeviceKind("phone")).toBe(true);
+    expect(validDeviceKind("toaster")).toBe(false);
+  });
+  it("accepts a volume between 0 and 1 and never treats it as a transport change", () => {
+    expect(validCommand({ type: "volume", value: 0.4 })).toBe(true);
+    expect(validCommand({ type: "volume", value: 1.5 })).toBe(false);
+    expect(validCommand({ type: "volume", value: -0.1 })).toBe(false);
+    expect(isQueueCommand({ type: "volume", value: 0.4 })).toBe(true);
+  });
+  it("records the volume in the shared playback", () => {
+    const base: PartyPlayback = { queue: [{ id: "a", name: "a.mp3", mimeType: "audio/mpeg" }], currentIndex: 0, source: null, progress: 10, duration: 100,
+      isPlaying: true, shuffle: false, shuffleOrder: [], playNextIndex: null, loopMode: "off", meta: null, updatedAt: 0 };
+    const next = reducePlayback(base, { type: "volume", value: 0.3 }, 1000)!;
+    expect(next.volume).toBe(0.3);
+    expect(next.currentIndex).toBe(0);
+    expect(validPlayback(next)).toBe(true);
+    expect(validPlayback({ ...next, volume: 2 })).toBe(false);
+    expect(validPlayback(base)).toBe(true); // older outputs report no volume
   });
 });

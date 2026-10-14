@@ -3130,11 +3130,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       case "shuffle": toggleShuffle(); break;
       case "loop": cycleLoopMode(); break;
       case "insert": addToQueue(command.file); break;
+      case "volume": changeVolume(command.value); break;
       case "remove":
         if (queue[command.index]?.id === command.fileId) removeFromQueue(command.index);
         break;
     }
-  }, [play, togglePlay, setPlaying, seek, next, prev, getActiveAudio, toggleShuffle, cycleLoopMode, addToQueue, queue, removeFromQueue]);
+  }, [play, togglePlay, setPlaying, seek, next, prev, getActiveAudio, toggleShuffle, cycleLoopMode, addToQueue, changeVolume, queue, removeFromQueue]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({

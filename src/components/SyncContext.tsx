@@ -6,7 +6,7 @@ import usePartySocket from "partysocket/react";
 import { useAppAccess } from "@/components/AppAccessContext";
 import { SharedPlayerProvider, usePlayer, type PlayerContextValue } from "@/components/PlayerContext";
 import { useToast } from "@/components/ToastContext";
-import { HEARTBEAT_MS, PARTY_PROTOCOL, leaseDeadline, playbackDisplay, positionAt, upcoming, validPlayerCommand, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
+import { HEARTBEAT_MS, PARTY_PROTOCOL, describeDevice, leaseDeadline, playbackDisplay, positionAt, upcoming, validPlayerCommand, type DeviceKind, type PartyCommand, type PartyPlayback, type PartyRoom } from "@/lib/party";
 
 interface SyncContextValue {
   devices: PartyRoom["devices"];
@@ -17,6 +17,8 @@ interface SyncContextValue {
   connected: boolean;
   syncAvailable: boolean;
   outputName: string | null;
+  /** What kind of device the sound is on (for the "Playing on" bar and icons). */
+  outputKind: DeviceKind | null;
   localPlayback: boolean;
 }
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -25,12 +27,7 @@ export function useSync() {
   if (!ctx) throw new Error("useSync must be used within a SyncProvider");
   return ctx;
 }
-function deviceName() {
-  const ua = navigator.userAgent;
-  const browser = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : "Safari";
-  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : "Linux";
-  return `${browser} on ${os}`;
-}
+const thisDevice = () => describeDevice(navigator.userAgent, navigator.maxTouchPoints ?? 0);
 async function fetchToken(): Promise<{ token: string; roomId: string } | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
@@ -44,7 +41,7 @@ function snapshot(p: PlayerContextValue): PartyPlayback | null {
   void _picture;
   return { queue: p.queue, currentIndex: p.currentIndex, source: p.currentSource,
     progress: p.progress, duration: p.duration, isPlaying: p.isPlaying, shuffle: p.shuffle,
-    shuffleOrder: p.shuffleOrder, playNextIndex: p.playNextIndex, loopMode: p.loopMode, meta, updatedAt: Date.now() };
+    shuffleOrder: p.shuffleOrder, playNextIndex: p.playNextIndex, loopMode: p.loopMode, meta, updatedAt: Date.now(), volume: p.volume };
 }
 export function SyncProvider({ children }: { children: React.ReactNode }) {
   const { status, data: session } = useSession();
@@ -117,7 +114,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     query: async () => ({ token: (await fetchToken())?.token ?? "" }),
     onOpen(event) {
       // IDs belong to this PartySocket instance: separate tabs, stable across reconnects.
-      (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, name: deviceName(), commands: true }));
+      (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, ...thisDevice(), commands: true }));
     },
     onClose() { selectingHereRef.current = false; setConnected(false); detach(); },
     onError() { selectingHereRef.current = false; setConnected(false); detach(); },
@@ -268,6 +265,22 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     if (!connected || socket.readyState !== WebSocket.OPEN) { showToast("Reconnect to Party Play to control another device."); return; }
     socket.send(JSON.stringify({ type: "command", command: value }));
   }, [connected, socket, showToast, isSignedOut]);
+  // Remote volume like Spotify Connect: a dragged slider sends at most ~8 updates a second, always the last one.
+  const volumeSend = useRef<{ timer: ReturnType<typeof setTimeout> | null; value: number | null; at: number }>({ timer: null, value: null, at: 0 });
+  const remoteVolume = useCallback((value: number) => {
+    const v = volumeSend.current;
+    v.value = Math.max(0, Math.min(1, value));
+    const flush = () => {
+      v.timer = null;
+      if (v.value === null) return;
+      v.at = Date.now();
+      command({ type: "volume", value: v.value });
+      v.value = null;
+    };
+    const wait = 120 - (Date.now() - v.at);
+    if (wait <= 0) flush();
+    else if (!v.timer) v.timer = setTimeout(flush, wait);
+  }, [command]);
   const setPartyCommandHandler = player.setPartyCommandHandler;
   useEffect(() => {
     setPartyCommandHandler(available ? command : null);
@@ -369,7 +382,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         error: localOutput ? player.error : null,
         shuffle: p.shuffle, shuffleOrder: p.shuffleOrder, loopMode: p.loopMode,
         playNextIndex: p.playNextIndex, upNext: upcoming(p).map(index => ({ file: p.queue[index], index })),
+        volume: p.volume ?? player.volume,
       } : {}),
+      changeVolume: localOutput ? player.changeVolume : remoteVolume,
       play: (queue, index, source) => command({ type: "play", queue, index, source }),
       togglePlay: preview ? player.togglePlay : () => command({ type: "toggle" }),
       next: () => command({ type: "next" }), prev: () => command({ type: "previous" }),
@@ -382,11 +397,12 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         return player.previewTransition(...args);
       },
     };
-  }, [available, player, room, deviceId, now, command, showToast, detached, connected]);
+  }, [available, player, room, deviceId, now, command, remoteVolume, showToast, detached, connected]);
   const localPlayback = detached || !connected || !room?.outputId && !room?.pendingOutputId || room?.outputId === deviceId;
   const value = useMemo(() => ({ devices: room?.devices ?? [], deviceId, outputId: room?.outputId ?? null,
     pendingOutputId: detached ? null : room?.pendingOutputId ?? null, selectOutput, connected, syncAvailable: available,
     outputName: available && localPlayback ? "This device" : room?.devices.find(d => d.id === room.outputId)?.name ?? null,
+    outputKind: room?.devices.find(d => d.id === (localPlayback ? deviceId : room.outputId))?.kind ?? null,
     localPlayback,
   }), [room, deviceId, selectOutput, connected, available, localPlayback, detached]);
   return <SyncContext.Provider value={value}><SharedPlayerProvider value={shared}>{children}</SharedPlayerProvider></SyncContext.Provider>;

@@ -25,8 +25,26 @@ export interface PartyPlayback {
   loopMode: "off" | "all" | "one";
   meta: ParsedMetadata | null;
   updatedAt: number;
+  /** The output's volume, 0–1, reported by outputs that support remote volume. */
+  volume?: number;
 }
-export interface PartyDevice { id: string; name: string }
+export type DeviceKind = "phone" | "tablet" | "computer";
+export interface PartyDevice { id: string; name: string; kind?: DeviceKind }
+const DEVICE_KINDS: readonly string[] = ["phone", "tablet", "computer"];
+export const validDeviceKind = (v: unknown): v is DeviceKind => typeof v === "string" && DEVICE_KINDS.includes(v);
+
+/** A Spotify-style device label ("iPhone · Safari") and kind, from the user agent. iPadOS
+ * reports itself as a Mac, so a Mac with a touch screen is an iPad. */
+export function describeDevice(ua: string, maxTouchPoints = 0): { name: string; kind: DeviceKind } {
+  const browser = /Edg\//.test(ua) ? "Edge" : /SamsungBrowser/.test(ua) ? "Samsung Internet" : /Firefox\/|FxiOS/.test(ua) ? "Firefox"
+    : /Chrome\/|CriOS/.test(ua) ? "Chrome" : "Safari";
+  const ipad = /iPad/.test(ua) || (/Macintosh/.test(ua) && maxTouchPoints > 1);
+  if (/iPhone/.test(ua)) return { name: `iPhone · ${browser}`, kind: "phone" };
+  if (ipad) return { name: `iPad · ${browser}`, kind: "tablet" };
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? { name: `Android phone · ${browser}`, kind: "phone" } : { name: `Android tablet · ${browser}`, kind: "tablet" };
+  const os = /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows PC" : /CrOS/.test(ua) ? "Chromebook" : "Linux PC";
+  return { name: `${os} · ${browser}`, kind: "computer" };
+}
 export interface PartyRoom {
   type: "room";
   protocol: typeof PARTY_PROTOCOL;
@@ -52,7 +70,8 @@ export type PartyCommand =
   | { type: "playing"; value: boolean }
   | { type: "seek"; seconds: number }
   | { type: "insert"; file: DriveFile }
-  | { type: "remove"; index: number; fileId: string };
+  | { type: "remove"; index: number; fileId: string }
+  | { type: "volume"; value: number };
 
 export interface PartyPlayerCommand {
   type: "player-command";
@@ -72,7 +91,8 @@ export function validPlayerCommand(value: unknown): value is PartyPlayerCommand 
 }
 
 export function isQueueCommand(command: PartyCommand): boolean {
-  return ["insert", "remove", "shuffle", "loop"].includes(command.type);
+  // none of these may seek or restart the output's transport
+  return ["insert", "remove", "shuffle", "loop", "volume"].includes(command.type);
 }
 
 /** Missing versions (older workers), a handoff or a missed transport command require a full apply. */
@@ -140,6 +160,7 @@ export function reducePlayback(previous: PartyPlayback | null, command: PartyCom
     case "toggle": p.isPlaying = !p.isPlaying; break;
     case "playing": p.isPlaying = command.value; break;
     case "seek": p.progress = Math.max(0, p.duration ? Math.min(p.duration, command.seconds) : command.seconds); break;
+    case "volume": p.volume = command.value; break;
     case "loop": p.loopMode = p.loopMode === "off" ? "all" : p.loopMode === "all" ? "one" : "off"; break;
     case "shuffle": p.shuffle = !p.shuffle; p.shuffleOrder = p.shuffle ? shuffled(p.queue.length, p.currentIndex) : []; break;
     case "next":
@@ -192,6 +213,7 @@ export function validCommand(v: unknown): v is PartyCommand {
     case "seek": return finite(v.seconds);
     case "insert": return file(v.file);
     case "remove": return Number.isInteger(v.index) && finite(v.index) && typeof v.fileId === "string";
+    case "volume": return finite(v.value) && v.value <= 1;
     case "play": return queue(v.queue) && Number.isInteger(v.index) && finite(v.index) && v.index < v.queue.length && source(v.source);
     default: return false;
   }
@@ -206,5 +228,6 @@ export function validPlayback(v: unknown): v is PartyPlayback {
     && validMeta(v.meta)
     && Array.isArray(v.shuffleOrder) && v.shuffleOrder.every(i => Number.isInteger(i) && i >= 0 && i < (v.queue as DriveFile[]).length)
     && (!v.shuffle || v.shuffleOrder.includes(v.currentIndex))
+    && (v.volume === undefined || (finite(v.volume) && v.volume <= 1))
     && (v.playNextIndex === null || (Number.isInteger(v.playNextIndex) && finite(v.playNextIndex) && v.playNextIndex < v.queue.length));
 }

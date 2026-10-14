@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "@/components/Providers";
-import { SpeedInsights } from "@vercel/speed-insights/next"
+import { DockAnalytics } from "@/components/DockAnalytics";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -69,7 +69,7 @@ export default function RootLayout({
           hide-on-scroll-down/show-on-scroll-up) never sees any movement. */}
       <body className="flex h-dvh flex-col overflow-hidden">
         <Providers>{children}</Providers>
-        <SpeedInsights />
+        <DockAnalytics />
       </body>
     </html>
   );

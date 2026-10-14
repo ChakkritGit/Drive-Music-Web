@@ -18,7 +18,7 @@ import clsx from "clsx";
 import { usePlayer } from "@/components/PlayerContext";
 import { PlayPauseIcon } from "@/components/PlayPauseIcon";
 import { useSync } from "@/components/SyncContext";
-import { DevicePicker } from "@/components/DevicePicker";
+import { DeviceIcon, DevicePicker } from "@/components/DevicePicker";
 import { TrackRow } from "@/components/TrackRow";
 import { TransitionChip } from "@/components/TransitionChip";
 import { SeekSlider } from "@/components/SeekSlider";
@@ -65,7 +65,7 @@ export function Player() {
     cachedTracks,
     removeFromQueue,
   } = usePlayer();
-  const { outputName, outputId, deviceId, pendingOutputId, localPlayback } = useSync();
+  const { outputName, outputKind, outputId, deviceId, pendingOutputId, localPlayback } = useSync();
   const pathname = usePathname();
   const { canAccessApp } = useAppAccess();
   // The mobile bottom tab nav (see app/(app)/layout.tsx) renders only for routes inside that
@@ -199,8 +199,12 @@ export function Player() {
                 <span className="text-red-500">{error}</span>
               ) : pendingOutputId ? (
                 "Switching output…"
-              ) : outputName ? (
-                localPlayback || outputId === deviceId ? "Sound on this device" : `Sound on ${outputName}`
+              ) : outputName && !(localPlayback || outputId === deviceId) ? (
+                // another device has the sound: say where, like Spotify's "Playing on" line
+                <span className="inline-flex max-w-full items-center gap-1 font-semibold text-accent-strong">
+                  <DeviceIcon kind={outputKind} className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Playing on {outputName}</span>
+                </span>
               ) : (
                 currentMeta?.artist || " "
               )}

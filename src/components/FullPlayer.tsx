@@ -175,7 +175,7 @@ export function FullPlayer() {
                 <DevicePicker />
                 <div className="min-w-0 text-xs">
                   <p className="truncate text-zinc-600 dark:text-zinc-300">{pendingOutputId ? "Switching output…" : localPlayback ? "This device" : syncAvailable && !connected ? "Reconnecting…" : outputName ? outputId === deviceId ? "This device" : outputName : "Audio output"}</p>
-                  {outputName && <p className="mt-0.5 text-[10px] text-zinc-400">{localPlayback || outputId === deviceId ? "Playing here" : "Control from here"}</p>}
+                  {outputName && <p className={localPlayback || outputId === deviceId ? "mt-0.5 text-[10px] text-zinc-400" : "mt-0.5 text-[10px] font-semibold text-accent-strong"}>{localPlayback || outputId === deviceId ? "Playing here" : "Playing there · control it from here"}</p>}
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">

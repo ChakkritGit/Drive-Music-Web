@@ -1,10 +1,10 @@
 import { Server, routePartykitRequest, type Connection } from "partyserver";
 import { jwtVerify } from "jose";
 import type { SyncTokenPayload } from "../src/lib/sync";
-import { HANDOFF_MS, HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validPlayback, type PartyCommand, type PartyPlayback, type PartyRoom } from "../src/lib/party";
+import { HANDOFF_MS, HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validDeviceKind, validPlayback, type DeviceKind, type PartyCommand, type PartyPlayback, type PartyRoom } from "../src/lib/party";
 
 interface Env { PARTY_TOKEN_SECRET: string }
-type Device = { name: string; seen: number; leaseUntil: number; connection: Connection | null; commands: boolean };
+type Device = { name: string; kind?: DeviceKind; seen: number; leaseUntil: number; connection: Connection | null; commands: boolean };
 
 /** One command router and playback mirror per authenticated account. */
 export class SyncServer extends Server<Env> {
@@ -24,7 +24,7 @@ export class SyncServer extends Server<Env> {
     if (this.room.outputId && !this.room.pendingOutputId && this.pendingCommands.length) {
       for (const command of this.pendingCommands.splice(0)) this.dispatchCommand(command);
     }
-    this.room.devices = [...this.devices].filter(([, d]) => d.connection).map(([id, d]) => ({ id, name: d.name }));
+    this.room.devices = [...this.devices].filter(([, d]) => d.connection).map(([id, d]) => ({ id, name: d.name, ...(d.kind ? { kind: d.kind } : {}) }));
     this.broadcast(JSON.stringify({ ...this.room, serverTime: Date.now() }));
     if (this.room.playback) await this.ctx.storage.put("playback", this.room.playback);
     if (this.devices.size || this.releasing) {
@@ -103,7 +103,7 @@ export class SyncServer extends Server<Env> {
     const now = Date.now();
     if (m.type === "hello" && m.protocol === PARTY_PROTOCOL && typeof m.name === "string") {
       const previous = this.devices.get(connection.id);
-      this.devices.set(connection.id, { name: m.name.slice(0, 80), seen: now,
+      this.devices.set(connection.id, { name: m.name.slice(0, 80), kind: validDeviceKind(m.kind) ? m.kind : undefined, seen: now,
         leaseUntil: previous?.leaseUntil ?? 0, connection, commands: m.commands === true });
       connection.send(JSON.stringify({ type: "welcome", deviceId: connection.id }));
       await this.publish();
