@@ -7,9 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run",
-    "party:dev": "if [ -f .env.cloudflare ]; then set -a; . ./.env.cloudflare; set +a; fi; wrangler dev",
-    "party:deploy": "if [ -f .env.cloudflare ]; then set -a; . ./.env.cloudflare; set +a; fi; wrangler deploy"
+    "test": "vitest run"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -36,7 +34,6 @@
     "happy-dom": "^20.14.5",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.114.0"
+    "vitest": "^4.1.10"
   }
 }

@@ -5,9 +5,8 @@ vi.mock("partyserver", () => ({
     broadcast = vi.fn();
     getConnection = vi.fn();
   },
-  routePartykitRequest: vi.fn(async () => null),
 }));
-import worker, { SyncServer } from "./index";
+import { SyncServer } from "./index";
 import { HANDOFF_MS, LEASE_MS, PARTY_PROTOCOL, canPreservePosition, reducePlayback } from "../src/lib/party";
 import type { Connection } from "partyserver";
 const connection = (id: string) => ({ id, send: vi.fn(), close: vi.fn() }) as unknown as Connection;
@@ -423,11 +422,5 @@ describe("Party room", () => {
     expect(server.releasing).toBeNull();
     expect(server.devices.has("a")).toBe(true);
     expect(server.room.playback?.isPlaying).toBe(false);
-  });
-  it("exposes a public health check without exposing room data", async () => {
-    const response = await worker.fetch(new Request("https://worker/health"), { PARTY_TOKEN_SECRET: "configured" });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "ok", service: "drive-music-sync", protocol: PARTY_PROTOCOL });
-    expect((await worker.fetch(new Request("https://worker/health"), { PARTY_TOKEN_SECRET: "" })).status).toBe(503);
   });
 });

@@ -35,8 +35,8 @@ A personal music player that streams and caches audio straight from your own Goo
 - Analytics dashboard (`/admin`) with a live model visualization and JSON export
 
 **Social**
-- "Listen together" — real-time playback sync across your own devices
-- Passive "Playing on [device]" banner
+- "Listen together": Spotify Connect-style control across your own devices (pick the device that plays, control it and its volume from any other)
+- "Playing on [device]" line when the sound is on another device
 
 **Settings & data**
 - Eight themes — Light, Dark, Retro, Ocean, Sakura, Horror, Synthwave, Terminal — plus "System"
@@ -50,7 +50,7 @@ A personal music player that streams and caches audio straight from your own Goo
 - Web Audio API (dual `<audio>` element graph for crossfade, EQ, normalization, spatial audio, analyser)
 - IndexedDB for all local data — no server-side database
 - Google OAuth via NextAuth, `drive.readonly` scope only
-- PartyServer and PartySocket over Cloudflare Durable Object WebSockets for cross-device controls
+- PartySocket WebSockets to a self-hosted sync service (Bun + Elysia, runs `party/index.ts`) for cross-device controls
 - Vitest for tests
 
 ## Getting started
@@ -72,18 +72,24 @@ GOOGLE_CLIENT_SECRET=
 NEXTAUTH_URL=http://localhost:3000
 NEXTAUTH_SECRET=           # random secret, e.g. `openssl rand -base64 32`
 PARTY_TOKEN_SECRET=        # optional — enables "Listen together" sync
-NEXT_PUBLIC_PARTYKIT_HOST=127.0.0.1:1999
+NEXT_PUBLIC_PARTYKIT_HOST=127.0.0.1:8788
 ```
 
-`PARTY_TOKEN_SECRET` must also be set on the PartyKit side: `npx partykit env add PARTY_TOKEN_SECRET`.
+The sync service lives in the Thai-Weather repo (`deploy/apps/services`). To run it locally with the same secret:
+
+```bash
+cd ../Thai-Weather/deploy/apps/services
+scripts/vendor-drive-music.sh ../../../../drive-music-player   # copies party/index.ts + src/lib/party.ts
+PARTY_TOKEN_SECRET=… SYNC_DB=./data/sync.db bun src/sync.ts     # ws://127.0.0.1:8788
+```
+
+Production: https://drive-music.chakkritton.com/parties/… on the VPS; a push to `main` deploys the app and the sync service.
 
 ### Other scripts
 
 ```bash
 npm run lint          # eslint
 npm run test           # vitest
-npm run party:dev      # local PartyKit dev server (sync)
-npm run party:deploy   # deploy the PartyKit worker
 ```
 
 ## License

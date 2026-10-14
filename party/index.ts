@@ -1,6 +1,11 @@
-import { Server, routePartykitRequest, type Connection } from "partyserver";
-import { jwtVerify } from "jose";
-import type { SyncTokenPayload } from "../src/lib/sync";
+/**
+ * Party Play room logic: one command router and playback mirror per account.
+ *
+ * Runs on the VPS, not on Cloudflare: the sync service (Thai-Weather repo, deploy/apps/services/src/sync.ts,
+ * Bun + Elysia) copies this file and runs it on a small `partyserver` stand-in (SQLite storage, timers for
+ * alarms). That service also checks the PARTY_TOKEN_SECRET token. Keep this class runtime-neutral.
+ */
+import { Server, type Connection } from "partyserver";
 import { HANDOFF_MS, HEARTBEAT_MS, LEASE_MS, PARTY_PROTOCOL, isQueueCommand, positionAt, reducePlayback, validCommand, validDeviceKind, validPlayback, type DeviceKind, type PartyCommand, type PartyPlayback, type PartyRoom } from "../src/lib/party";
 
 interface Env { PARTY_TOKEN_SECRET: string }
@@ -190,25 +195,3 @@ export class SyncServer extends Server<Env> {
     else if (this.devices.size || this.releasing) await this.ctx.storage.setAlarm(Math.min(now + HEARTBEAT_MS, this.releasing?.until ?? Infinity));
   }
 }
-
-const worker = {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    if (new URL(request.url).pathname === "/health" && ["GET", "HEAD"].includes(request.method)) {
-      return Response.json({ status: env.PARTY_TOKEN_SECRET ? "ok" : "degraded", service: "drive-music-sync", protocol: PARTY_PROTOCOL },
-        { status: env.PARTY_TOKEN_SECRET ? 200 : 503, headers: { "Cache-Control": "no-store" } });
-    }
-    const response = await routePartykitRequest(request, env, {
-      async onBeforeConnect(req, lobby) {
-        const token = new URL(req.url).searchParams.get("token");
-        if (!token || !env.PARTY_TOKEN_SECRET) return new Response("Unauthorized", { status: 401 });
-        try {
-          const { payload } = await jwtVerify<SyncTokenPayload>(token, new TextEncoder().encode(env.PARTY_TOKEN_SECRET), { algorithms: ["HS256"] });
-          if (payload.sub !== lobby.name) return new Response("Unauthorized", { status: 401 });
-        } catch { return new Response("Unauthorized", { status: 401 }); }
-      },
-    });
-    return response ?? new Response("Not Found", { status: 404 });
-  },
-};
-
-export default worker;
