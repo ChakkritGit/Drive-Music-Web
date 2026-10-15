@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "@/components/Providers";
 import { DockAnalytics } from "@/components/DockAnalytics";
 import "./globals.css";
+import { STARTUP_IMAGES } from "@/lib/splash";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -36,6 +37,7 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "Drive Music",
+    startupImage: STARTUP_IMAGES,
   },
   verification: {
     google: "B5OIhoMKpXg4QcPM0FcVLJUQ6hqwnKxqzd_xARGQf9Q",
