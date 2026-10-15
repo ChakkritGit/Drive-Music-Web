@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Folder, Loader2 } from "lucide-react";
-import { isFolder, listFolder } from "@/lib/drive";
+import { Folder, Loader2, Plus } from "lucide-react";
+import { isFolder, listFolder, listPickedAudio } from "@/lib/drive";
+import { PICK_MODE } from "@/lib/googleConfig";
+import { pickAudioFiles } from "@/lib/picker";
+import { useToast } from "@/components/ToastContext";
 import type { DriveFile } from "@/types";
 import { TrackRow } from "@/components/TrackRow";
 import { DownloadAllButton } from "@/components/DownloadAllButton";
@@ -20,6 +23,123 @@ interface Crumb {
 const ROOT_CRUMB: Crumb = { id: "root", name: "My Drive" };
 
 export function DriveBrowser() {
+  return PICK_MODE ? <PickedMusic /> : <FolderBrowser />;
+}
+
+const PICKED_SOURCE = { type: "folder", id: "picked", name: "Google Drive" } as const;
+
+/**
+ * `drive.file` mode: the app sees only the songs chosen in Google's picker, so this page lists
+ * those and offers the picker to add more (several at a time).
+ */
+function PickedMusic() {
+  const { data: session } = useSession();
+  const { isOffline } = useAppAccess();
+  const { cachedTracks } = usePlayer();
+  const { showToast } = useToast();
+  const [items, setItems] = useState<DriveFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [picking, setPicking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    if (!session?.accessToken || isOffline) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: mark loading before the fetch starts
+    setLoading(true);
+    setError(null);
+    listPickedAudio(session.accessToken)
+      .then((files) => {
+        if (!cancelled) setItems(files);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load your songs");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.accessToken, isOffline, reload]);
+
+  const add = async () => {
+    if (!session?.accessToken) return;
+    setPicking(true);
+    try {
+      const picked = await pickAudioFiles(session.accessToken);
+      if (picked.length) {
+        showToast(picked.length === 1 ? "Added 1 song" : `Added ${picked.length} songs`);
+        setReload((n) => n + 1);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Couldn't open Google's file picker");
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  if (isOffline) {
+    return (
+      <div className={PAGE}>
+        <PageHeader eyebrow="Google Drive" title="My Drive" />
+        <EmptyState action={<Link href="/library" className={PILL_PRIMARY}>Open downloaded music</Link>}>
+          Connect to the internet to add songs from Google Drive. Downloaded tracks are available in your offline library.
+        </EmptyState>
+      </div>
+    );
+  }
+
+  const addButton = (
+    <button type="button" onClick={add} disabled={picking || !session?.accessToken} className={PILL_PRIMARY}>
+      {picking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Add songs from Drive
+    </button>
+  );
+
+  return (
+    <div className={PAGE}>
+      <PageHeader
+        eyebrow="Google Drive"
+        title="My Drive"
+        meta={items.length ? `${items.length} song${items.length === 1 ? "" : "s"} · only the songs you add are visible to Drive Music` : undefined}
+        actions={items.length ? addButton : undefined}
+      />
+
+      {loading && (
+        <div className="flex items-center gap-2 py-10 text-sm text-zinc-500">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+        </div>
+      )}
+
+      {error && <p className="py-10 text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      {!loading && !error && items.length === 0 && (
+        <EmptyState icon={<Folder className="h-6 w-6" />} action={addButton}>
+          Choose the songs Drive Music may play. In Google&apos;s picker, tap several songs, then Select. Drive Music never sees anything else in your Drive.
+        </EmptyState>
+      )}
+
+      {!loading && !error && items.length > 0 && <DownloadAllButton files={items} />}
+
+      <ul className="stagger flex flex-col">
+        {items.map((file, i) => (
+          <TrackRow
+            key={file.id}
+            file={file}
+            queue={items}
+            index={i}
+            cachedTrack={cachedTracks.get(file.id)}
+            nextFile={items[i + 1]}
+            source={PICKED_SOURCE}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FolderBrowser() {
   const { data: session } = useSession();
   const { isOffline } = useAppAccess();
   const { cachedTracks } = usePlayer();

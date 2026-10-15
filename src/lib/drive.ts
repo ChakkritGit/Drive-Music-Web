@@ -49,6 +49,30 @@ export async function listFolder(accessToken: string, folderId: string): Promise
   return results;
 }
 
+/**
+ * Every audio file the app may read. Under the `drive.file` scope that is exactly the files the
+ * user picked in Google's picker (name-sorted).
+ */
+export async function listPickedAudio(accessToken: string): Promise<DriveFile[]> {
+  const results: DriveFile[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params = new URLSearchParams({
+      q: "trashed = false and mimeType contains 'audio/'",
+      fields: `nextPageToken, files(${FIELDS})`,
+      orderBy: "name",
+      pageSize: "1000",
+      spaces: "drive",
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+    const res = await driveFetch(`${DRIVE_FILES_ENDPOINT}?${params.toString()}`, accessToken);
+    const data: { files: DriveFile[]; nextPageToken?: string } = await res.json();
+    results.push(...data.files);
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return results;
+}
+
 export async function getFileMetadata(accessToken: string, fileId: string): Promise<DriveFile> {
   const res = await driveFetch(`${DRIVE_FILES_ENDPOINT}/${fileId}?fields=${FIELDS}`, accessToken);
   return res.json();

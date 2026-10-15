@@ -311,6 +311,11 @@ button:not(:disabled),
 @media (max-height: 44rem) {
   .now-playing-content { align-content: start; }
 }
+/* A phone scrolls these by touch; the scroll bar only covered the artwork's edge. */
+@media (max-width: 63.99rem) {
+  .now-playing-content, .now-playing-queue-shell ul { scrollbar-width: none; }
+  .now-playing-content::-webkit-scrollbar, .now-playing-queue-shell ul::-webkit-scrollbar { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .now-playing-layout, .now-playing-queue-shell, .now-playing-queue { transition: none; }
 }

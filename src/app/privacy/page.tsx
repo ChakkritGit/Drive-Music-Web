@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { PICK_MODE } from "@/lib/googleConfig";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
@@ -53,13 +54,21 @@ export default function PrivacyPolicyPage() {
                 Your basic profile (name, email address, profile picture) — used only to show
                 who&apos;s signed in and to key your own data (see below).
               </li>
-              <li>
-                <strong className="text-zinc-800 dark:text-zinc-100">Read-only</strong> access
-                to your Google Drive (the <code className="rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800">drive.readonly</code>{" "}
-                scope). Drive Music can list folders and download audio files you choose to
-                open — it cannot create, edit, move, or delete anything in your Drive, and it
-                never requests access to files you haven&apos;t browsed to.
-              </li>
+              {PICK_MODE ? (
+                <li>
+                  Access to <strong className="text-zinc-800 dark:text-zinc-100">only the songs you pick</strong>{" "}
+                  in Google&apos;s file picker (the <code className="rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800">drive.file</code>{" "}
+                  scope). Drive Music cannot see, list, or open anything else in your Drive.
+                </li>
+              ) : (
+                <li>
+                  <strong className="text-zinc-800 dark:text-zinc-100">Read-only</strong> access
+                  to your Google Drive (the <code className="rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800">drive.readonly</code>{" "}
+                  scope). Drive Music can list folders and download audio files you choose to
+                  open — it cannot create, edit, move, or delete anything in your Drive, and it
+                  never requests access to files you haven&apos;t browsed to.
+                </li>
+              )}
             </ul>
           </section>
 

@@ -1,8 +1,7 @@
 import type { NextAuthOptions, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import GoogleProvider from "next-auth/providers/google";
-
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+import { DRIVE_SCOPE } from "@/lib/googleConfig";
 
 async function refreshAccessToken(token: JWT): Promise<JWT> {
   try {

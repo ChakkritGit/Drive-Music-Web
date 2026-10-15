@@ -101,6 +101,9 @@ export function MixGlow({ active }: { active: boolean }) {
         // presses near the edge would make the main transport control feel unreliable.
         // Behind the button rather than over it — see the `relative z-10` on the button itself.
         "pointer-events-none absolute inset-0 z-0 text-accent",
+        // Thinner, softer strands on a phone: at the same viewBox widths they read as thick
+        // ropes around the smaller button.
+        "[--strand-scale:0.5] sm:[--strand-scale:1]",
         // Retracts to just inside the button rather than to nothing: shrinking to zero reads as
         // the strands being sucked into a point, while stopping at the button's edge reads as
         // them sliding out from behind it and back in, which is what's meant.
@@ -149,9 +152,11 @@ export function MixGlow({ active }: { active: boolean }) {
               d={helixPath(0, HELIX_STRANDS[strandIndex])}
               stroke="currentColor"
               strokeOpacity={pass.opacity}
-              strokeWidth={pass.width}
               strokeLinejoin="round"
-              style={pass.blur > 0 ? { filter: `blur(${pass.blur}px)` } : undefined}
+              style={{
+                strokeWidth: `calc(var(--strand-scale, 1) * ${pass.width})`,
+                ...(pass.blur > 0 ? { filter: `blur(calc(var(--strand-scale, 1) * ${pass.blur}px))` } : {}),
+              }}
             />
           )),
         )}
