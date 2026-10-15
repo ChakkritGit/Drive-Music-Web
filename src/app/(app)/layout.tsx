@@ -199,7 +199,9 @@ function BottomNavLink({
         aria-hidden="true"
         className={clsx("absolute top-0 h-1 w-6 rounded-full bg-accent transition-opacity", active ? "opacity-100" : "opacity-0")}
       />
-      {icon}
+      <span data-tab-icon className="inline-grid place-items-center">
+        {icon}
+      </span>
       {label}
     </Link>
   );
