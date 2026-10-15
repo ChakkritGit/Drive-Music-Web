@@ -187,6 +187,7 @@ function BottomNavLink({
     <Link
       href={href}
       aria-current={active ? "page" : undefined}
+      data-tab-bounce
       className={clsx(
         "relative flex h-14 min-w-16 flex-col items-center justify-center gap-1 rounded-lg px-2 text-[11px] font-medium transition",
         active ? "text-accent-strong" : "text-zinc-500 dark:text-zinc-400",

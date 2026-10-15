@@ -4,6 +4,7 @@ import { Providers } from "@/components/Providers";
 import { DockAnalytics } from "@/components/DockAnalytics";
 import "./globals.css";
 import { STARTUP_IMAGES } from "@/lib/splash";
+import { PwaChrome } from "@/components/pwa-chrome";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -72,6 +73,7 @@ export default function RootLayout({
       <body className="flex h-dvh flex-col overflow-hidden">
         <Providers>{children}</Providers>
         <DockAnalytics />
+        <PwaChrome />
       </body>
     </html>
   );
