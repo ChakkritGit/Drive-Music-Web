@@ -142,6 +142,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </Suspense>
 
         <main
+          id="app-scroll"
           onScroll={handleMainScroll}
           className="min-h-0 flex-1 overflow-y-auto pb-[calc(12rem+env(safe-area-inset-bottom))] lg:pb-32"
         >
@@ -162,6 +163,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               key={item.href}
               href={item.href}
               active={item.match(pathname)}
+              current={pathname === item.href}
               icon={item.icon}
               label={item.label}
             />
@@ -172,14 +174,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** The pages scroll inside <main id="app-scroll">, not the window, so a tab resets that. */
+function toTop(smooth: boolean) {
+  const behavior: ScrollBehavior = smooth && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto";
+  document.getElementById("app-scroll")?.scrollTo({ top: 0, behavior });
+}
+
+/** Like Dock: the tab of the page you are on scrolls it to the top; another tab opens its page at the top. */
 function BottomNavLink({
   href,
   active,
+  current,
   icon,
   label,
 }: {
   href: string;
   active: boolean;
+  current: boolean;
   icon: React.ReactNode;
   label: string;
 }) {
@@ -188,6 +199,12 @@ function BottomNavLink({
       href={href}
       aria-current={active ? "page" : undefined}
       data-tab-bounce
+      onClick={(e) => {
+        if (current) {
+          e.preventDefault();
+          toTop(true);
+        } else toTop(false);
+      }}
       className={clsx(
         "relative flex h-14 min-w-16 flex-col items-center justify-center gap-1 rounded-lg px-2 text-[11px] font-medium transition",
         active ? "text-accent-strong" : "text-zinc-500 dark:text-zinc-400",
