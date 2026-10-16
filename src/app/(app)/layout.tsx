@@ -49,11 +49,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // who are already signed in.
   if (status === "loading" && !canAccessApp && !isSignedOut) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
         <AppLogo size={56} />
         <div>
           <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
-          <p className="mt-2 max-w-xs text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-2 max-w-xs text-sm text-zinc-600 dark:text-zinc-400">
             A personal audio player for the music files in your Google Drive.
           </p>
         </div>
@@ -68,7 +68,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             the homepage to link its privacy policy and terms, so they have to live here too,
             not only on the signed-out screen. */}
         <PolicyLinks />
-      </div>
+      </main>
     );
   }
 

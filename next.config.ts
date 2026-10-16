@@ -26,6 +26,10 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        source: "/logo-168.png",
+        headers: [{ key: "Cache-Control", value: "public, max-age=2592000, stale-while-revalidate=604800" }],
+      },
+      {
         source: "/(.*)",
         // No CSP on purpose: the app loads Google thumbnails and avatars and talks to a
         // PartyKit host from env, and a wrong policy would silently break playback.

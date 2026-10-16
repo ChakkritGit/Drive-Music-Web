@@ -13,7 +13,8 @@ export function AppLogo({
 }) {
   return (
     <Image
-      src="/icon-512.png"
+      // 168 px: the largest it is drawn (56) at 3x; the 512 px icon was 15 KB for a 56 px logo
+      src="/logo-168.png"
       alt=""
       width={size}
       height={size}

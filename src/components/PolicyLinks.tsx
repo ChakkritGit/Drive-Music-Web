@@ -5,12 +5,12 @@ import Link from "next/link";
 // including the pre-session loading state, which is the only thing a non-JS fetch of "/" sees.
 export function PolicyLinks() {
   return (
-    <p className="text-[11px] text-zinc-400">
-      <Link href="/privacy" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
+    <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
+      <Link href="/privacy" className="underline hover:text-zinc-950 dark:hover:text-zinc-200">
         Privacy Policy
       </Link>{" "}
       ·{" "}
-      <Link href="/terms" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
+      <Link href="/terms" className="underline hover:text-zinc-950 dark:hover:text-zinc-200">
         Terms of Service
       </Link>
     </p>

@@ -179,8 +179,9 @@ export function Player() {
           onClick={expand}
           disabled={!currentFile}
           className="flex min-w-0 items-center gap-3 rounded-lg text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none disabled:cursor-default"
-          aria-label="Expand player"
         >
+          {/* Its name is what it shows (the track), after this: an aria-label replaced the visible text. */}
+          <span className="sr-only">Expand player: </span>
           {/* Round, like a record on the deck. */}
           <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 ring-1 ring-zinc-950/5 lg:h-14 lg:w-14 dark:bg-zinc-800 dark:ring-white/10">
             {currentMeta?.pictureDataUrl ? (

@@ -6,16 +6,16 @@ import { AppLogo } from "@/components/AppLogo";
 
 export function SignInScreen({ isOffline = false }: { isOffline?: boolean }) {
   return (
-    <div className="flex flex-1 items-center justify-center p-6">
+    <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <AppLogo size={56} className="mx-auto mb-6" />
         <h1 className="text-xl font-bold tracking-tight text-zinc-950 dark:text-zinc-50">Drive Music</h1>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
           Drive Music is a personal audio player for the music files already sitting in your
           Google Drive — browse your folders, play tracks, download them for offline listening,
           and build playlists, all from your own Drive.
         </p>
-        <p className="mt-3 text-xs text-zinc-400">
+        <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
           Sign in with Google to grant read-only access to your Drive — Drive Music never
           edits, uploads, or deletes anything there.
         </p>
@@ -26,19 +26,19 @@ export function SignInScreen({ isOffline = false }: { isOffline?: boolean }) {
         >
           Sign in with Google
         </button>
-        {isOffline && <p role="status" className="mt-3 text-xs text-zinc-500">Reconnect to sign in with Google.</p>}
-        <p className="mt-4 text-[11px] text-zinc-500">
+        {isOffline && <p role="status" className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">Reconnect to sign in with Google.</p>}
+        <p className="mt-4 text-[11px] text-zinc-600 dark:text-zinc-400">
           By continuing, you agree to the{" "}
-          <Link href="/terms" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
+          <Link href="/terms" className="underline hover:text-zinc-950 dark:hover:text-zinc-200">
             Terms of Service
           </Link>{" "}
           and{" "}
-          <Link href="/privacy" className="underline hover:text-zinc-600 dark:hover:text-zinc-300">
+          <Link href="/privacy" className="underline hover:text-zinc-950 dark:hover:text-zinc-200">
             Privacy Policy
           </Link>
           .
         </p>
       </div>
-    </div>
+    </main>
   );
 }
