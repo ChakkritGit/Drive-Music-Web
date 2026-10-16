@@ -5,11 +5,12 @@ import { Heart, ListMusic, Plus, Trash2 } from "lucide-react";
 import { usePlayer } from "@/components/PlayerContext";
 import { FAVORITES_PLAYLIST_NAME, usePlaylists } from "@/components/PlaylistsContext";
 import { MediaCard } from "@/components/MediaCard";
+import { MusicPageSkeleton } from "@/components/LoadingSkeletons";
 import { EmptyState, PAGE, PILL_PRIMARY, PageHeader } from "@/components/ui";
 import type { Playlist } from "@/types";
 
 export function PlaylistsView({ onOpen }: { onOpen: (playlist: Playlist) => void }) {
-  const { playlists, createPlaylist, deletePlaylist } = usePlaylists();
+  const { playlists, playlistsLoaded, createPlaylist, deletePlaylist } = usePlaylists();
   const { cachedTracks, play } = usePlayer();
   const [newName, setNewName] = useState("");
 
@@ -25,6 +26,8 @@ export function PlaylistsView({ onOpen }: { onOpen: (playlist: Playlist) => void
       .map((f) => cachedTracks.get(f.id)?.parsedMeta.pictureDataUrl)
       .filter((c): c is string => !!c)
       .slice(0, 4);
+
+  if (!playlistsLoaded) return <MusicPageSkeleton view="playlists" />;
 
   return (
     <div className={PAGE}>

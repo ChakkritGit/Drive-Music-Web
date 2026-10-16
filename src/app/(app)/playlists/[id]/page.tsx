@@ -3,12 +3,15 @@
 import { useParams, useRouter } from "next/navigation";
 import { usePlaylists } from "@/components/PlaylistsContext";
 import { PlaylistDetail } from "@/components/PlaylistDetail";
+import { MusicPageSkeleton } from "@/components/LoadingSkeletons";
 
 export default function Page() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { playlists } = usePlaylists();
+  const { playlists, playlistsLoaded } = usePlaylists();
   const playlist = playlists.find((p) => p.id === id);
+
+  if (!playlistsLoaded) return <MusicPageSkeleton view="playlist" />;
 
   if (!playlist) {
     return (

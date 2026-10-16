@@ -7,6 +7,7 @@ import { EmptyState, PAGE, PILL_PRIMARY, PageHeader, SearchField } from "@/compo
 import type { PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { TrackRow } from "@/components/TrackRow";
+import { MusicPageSkeleton } from "@/components/LoadingSkeletons";
 import { SequenceMixButton } from "@/components/SequenceMixButton";
 import { extractFeatures } from "@/lib/features";
 import { predict, weightedRandomIndex } from "@/lib/model";
@@ -14,7 +15,7 @@ import { predict, weightedRandomIndex } from "@/lib/model";
 const LIBRARY_SOURCE: PlaySource = { type: "library", id: "__library__", name: "Your Library" };
 
 export function LibraryView() {
-  const { cachedTracks, removeFromCache, shuffle, toggleShuffle, play, model } = usePlayer();
+  const { cachedTracks, libraryLoaded, removeFromCache, shuffle, toggleShuffle, play, model } = usePlayer();
   const tracks = Array.from(cachedTracks.values()).sort((a, b) => b.cachedAt - a.cachedAt);
   // The queue passed to each row stays the full, unfiltered list — searching only changes
   // what's displayed, not what plays next/prev, so up-next isn't scoped to the search text.
@@ -44,6 +45,8 @@ export function LibraryView() {
     const weights = queue.map((f) => predict(model, extractFeatures(f, cachedTracks.get(f.id)?.parsedMeta, now)));
     play(queue, weightedRandomIndex(weights), LIBRARY_SOURCE);
   }
+
+  if (!libraryLoaded) return <MusicPageSkeleton view="library" />;
 
   return (
     <div className={PAGE}>

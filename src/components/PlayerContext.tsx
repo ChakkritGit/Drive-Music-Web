@@ -136,6 +136,7 @@ export interface PlayerContextValue {
   duration: number;
   volume: number;
   cachedTracks: Map<string, CachedTrack>;
+  libraryLoaded: boolean;
   downloadProgress: DownloadProgress | null;
   shuffle: boolean;
   loopMode: LoopMode;
@@ -877,6 +878,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [cachedTracks, setCachedTracks] = useState<Map<string, CachedTrack>>(
     new Map(),
   );
+  const [libraryLoaded, setLibraryLoaded] = useState(false);
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
   const [analyzeProgress, setAnalyzeProgress] =
@@ -1162,8 +1164,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   ]);
 
   const refreshCachedTracks = useCallback(async () => {
-    const tracks = await listCachedTracks();
-    setCachedTracks(new Map(tracks.map((t) => [t.fileId, t])));
+    try {
+      const tracks = await listCachedTracks();
+      setCachedTracks(new Map(tracks.map((t) => [t.fileId, t])));
+    } finally {
+      setLibraryLoaded(true);
+    }
   }, []);
 
   const refreshRecentSources = useCallback(async () => {
@@ -1171,8 +1177,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed cache index from IndexedDB on mount
     refreshCachedTracks();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed recent sources from IndexedDB on mount
     refreshRecentSources();
   }, [refreshCachedTracks, refreshRecentSources]);
 
@@ -3151,6 +3157,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       duration,
       volume,
       cachedTracks,
+      libraryLoaded,
       downloadProgress,
       shuffle,
       loopMode,
@@ -3230,6 +3237,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       duration,
       volume,
       cachedTracks,
+      libraryLoaded,
       downloadProgress,
       shuffle,
       loopMode,

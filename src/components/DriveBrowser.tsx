@@ -14,6 +14,7 @@ import { DownloadAllButton } from "@/components/DownloadAllButton";
 import { usePlayer } from "@/components/PlayerContext";
 import { EmptyState, PAGE, PILL_PRIMARY, PageHeader } from "@/components/ui";
 import { useAppAccess } from "@/components/AppAccessContext";
+import { TrackListSkeleton } from "@/components/LoadingSkeletons";
 
 interface Crumb {
   id: string;
@@ -106,11 +107,7 @@ function PickedMusic() {
         actions={items.length ? addButton : undefined}
       />
 
-      {loading && (
-        <div className="flex items-center gap-2 py-10 text-sm text-zinc-500">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-        </div>
-      )}
+      {loading && <TrackListSkeleton />}
 
       {error && <p className="py-10 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
@@ -122,7 +119,7 @@ function PickedMusic() {
 
       {!loading && !error && items.length > 0 && <DownloadAllButton files={items} />}
 
-      <ul className="stagger flex flex-col">
+      {!loading && !error && <ul className="stagger flex flex-col">
         {items.map((file, i) => (
           <TrackRow
             key={file.id}
@@ -134,7 +131,7 @@ function PickedMusic() {
             source={PICKED_SOURCE}
           />
         ))}
-      </ul>
+      </ul>}
     </div>
   );
 }
@@ -207,11 +204,7 @@ function FolderBrowser() {
         </nav>
       )}
 
-      {loading && (
-        <div className="flex items-center gap-2 py-10 text-sm text-zinc-500">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-        </div>
-      )}
+      {loading && <TrackListSkeleton folders />}
 
       {error && <p className="py-10 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
@@ -219,7 +212,7 @@ function FolderBrowser() {
 
       {!loading && !error && audioFiles.length > 0 && <DownloadAllButton files={audioFiles} />}
 
-      <ul className="stagger flex flex-col">
+      {!loading && !error && <ul className="stagger flex flex-col">
         {items.map((file, position) =>
           isFolder(file) ? (
             <li key={file.id}>
@@ -247,7 +240,7 @@ function FolderBrowser() {
             />
           ),
         )}
-      </ul>
+      </ul>}
     </div>
   );
 }

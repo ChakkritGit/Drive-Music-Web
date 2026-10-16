@@ -7,6 +7,7 @@ import type { CachedTrack, DriveFile, PlaySource } from "@/types";
 import { usePlayer } from "@/components/PlayerContext";
 import { usePlaylists, FAVORITES_PLAYLIST_NAME } from "@/components/PlaylistsContext";
 import { MediaCard } from "@/components/MediaCard";
+import { MusicPageSkeleton } from "@/components/LoadingSkeletons";
 import { CollectionDetail } from "@/components/CollectionDetail";
 import { extractFeatures } from "@/lib/features";
 import { predict } from "@/lib/model";
@@ -44,9 +45,9 @@ function sourceLabel(type: "folder" | "playlist" | "library"): string {
 }
 
 export function HomeView() {
-  const { cachedTracks, recentSources, model, currentFile, currentMeta, isPlaying, togglePlay, expand, play, currentSource } =
+  const { cachedTracks, libraryLoaded, recentSources, model, currentFile, currentMeta, isPlaying, togglePlay, expand, play, currentSource } =
     usePlayer();
-  const { playlists } = usePlaylists();
+  const { playlists, playlistsLoaded } = usePlaylists();
   const [openCollection, setOpenCollection] = useState<OpenCollection | null>(null);
 
   const allCached = Array.from(cachedTracks.values()).sort((a, b) => b.cachedAt - a.cachedAt);
@@ -81,6 +82,8 @@ export function HomeView() {
   const playCollection = (tracks: DriveFile[], source?: PlaySource) => {
     if (tracks.length > 0) play(tracks, 0, source);
   };
+
+  if (!libraryLoaded || !playlistsLoaded) return <MusicPageSkeleton view="home" />;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-10 lg:py-10">

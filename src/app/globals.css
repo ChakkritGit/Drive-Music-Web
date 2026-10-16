@@ -198,7 +198,14 @@ button:not(:disabled),
   animation-delay: 420ms;
 }
 
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.skeleton-block { animation: skeletonPulse 1.8s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
+  .skeleton-block,
   .page-in,
   .stagger > * {
     animation: none;

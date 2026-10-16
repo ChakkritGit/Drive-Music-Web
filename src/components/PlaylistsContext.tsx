@@ -16,6 +16,7 @@ export const FAVORITES_PLAYLIST_NAME = "Favorites";
 
 interface PlaylistsContextValue {
   playlists: Playlist[];
+  playlistsLoaded: boolean;
   createPlaylist: (name: string) => Promise<Playlist>;
   deletePlaylist: (id: string) => Promise<void>;
   renamePlaylist: (id: string, name: string) => Promise<void>;
@@ -35,13 +36,17 @@ export function usePlaylists(): PlaylistsContextValue {
 
 export function PlaylistsProvider({ children }: { children: React.ReactNode }) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [playlistsLoaded, setPlaylistsLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
-    setPlaylists(await listPlaylists());
+    try {
+      setPlaylists(await listPlaylists());
+    } finally {
+      setPlaylistsLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seed playlist index from IndexedDB on mount
     refresh();
   }, [refresh]);
 
@@ -109,6 +114,7 @@ export function PlaylistsProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<PlaylistsContextValue>(
     () => ({
       playlists,
+      playlistsLoaded,
       createPlaylist,
       deletePlaylist,
       renamePlaylist,
@@ -119,6 +125,7 @@ export function PlaylistsProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       playlists,
+      playlistsLoaded,
       createPlaylist,
       deletePlaylist,
       renamePlaylist,

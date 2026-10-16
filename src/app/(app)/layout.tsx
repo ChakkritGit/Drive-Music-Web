@@ -8,7 +8,7 @@ import { Settings, LogOut, User } from "lucide-react";
 import clsx from "clsx";
 import { SignInScreen } from "@/components/SignInScreen";
 import { AppLogo } from "@/components/AppLogo";
-import { PolicyLinks } from "@/components/PolicyLinks";
+import { MusicPageSkeleton, SessionSkeleton } from "@/components/LoadingSkeletons";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 import { NAV_ITEMS } from "@/components/nav";
@@ -40,36 +40,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     lastScrollTopRef.current = top;
   }
 
-  // While the session is resolving (including the initial server-rendered HTML, which always
-  // starts "loading" since useSession() fetches client-side), this still needs to carry the
-  // app's name and purpose — a bare "Loading…" is what a crawler (or anyone who never waits
-  // past the first paint) would see instead of a real page. But it's shown to *every* visitor
-  // on *every* load, including already-signed-in ones — so unlike the signed-out case, it
-  // can't look like a "Sign in with Google" prompt, or it'd flash a misleading CTA at people
-  // who are already signed in.
+  // Retain the public description and policy links while the destination page loads.
   if (status === "loading" && !canAccessApp && !isSignedOut) {
-    return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
-        <AppLogo size={56} />
-        <div>
-          <h1 className="text-lg font-medium text-zinc-900 dark:text-zinc-50">Drive Music</h1>
-          <p className="mt-2 max-w-xs text-sm text-zinc-600 dark:text-zinc-400">
-            A personal audio player for the music files in your Google Drive.
-          </p>
-        </div>
-        <div
-          className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-zinc-100"
-          role="status"
-          aria-label="Loading"
-        />
-        {/* This block *is* the server-rendered homepage — useSession() only resolves client-
-            side, so anything that reads the HTML without running JS (Google's OAuth branding
-            review among them) sees this and never the sign-in screen below. Google requires
-            the homepage to link its privacy policy and terms, so they have to live here too,
-            not only on the signed-out screen. */}
-        <PolicyLinks />
-      </main>
-    );
+    return <SessionSkeleton pathname={pathname} />;
   }
 
   if (!canAccessApp) {
@@ -148,7 +121,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         >
           {/* Keyed by the path, so each page change plays the entrance. */}
           <div key={pathname} className="page-in">
-            {localOnly ? <Suspense><LibraryView /></Suspense> : children}
+            {localOnly ? <Suspense fallback={<MusicPageSkeleton view="library" />}><LibraryView /></Suspense> : children}
           </div>
         </main>
       </div>
