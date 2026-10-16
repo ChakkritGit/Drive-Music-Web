@@ -24,3 +24,7 @@ Drive Music signs in with Google and asks only for read-only Drive access. Audio
 
 - [Author: Chakkrit Laolit](https://chakkritton.com)
 - [System status](https://status.chakkritton.com)
+
+## Optional
+
+- [Full text for language models](https://drive-music.chakkritton.com/llms-full.txt)

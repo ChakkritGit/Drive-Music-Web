@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: "How Drive Music accesses, stores, and handles your data.",
 };
 
-const LAST_UPDATED = "August 6, 2026";
+const LAST_UPDATED = "October 16, 2026";
 const GOOGLE_USER_DATA_POLICY_URL =
   "https://developers.google.com/terms/api-services-user-data-policy";
 const REPO_URL = "https://github.com/ChakkritGit/drive-music";
@@ -119,15 +119,20 @@ export default function PrivacyPolicyPage() {
                 browser.
               </li>
               <li>
-                <strong className="text-zinc-800 dark:text-zinc-100">&quot;Listen together&quot; sync</strong> — if you turn this on, a
-                small real-time message (which track, play/pause, playback position) is
+                <strong className="text-zinc-800 dark:text-zinc-100">&quot;Listen together&quot; sync</strong> — if you turn this on, small
+                real-time messages (which track, play/pause, playback position, volume) are
                 relayed between your own devices signed into the same Google account, through a
-                private, token-gated room. It exists only for the live connection and isn&apos;t
-                written to any database; other people can&apos;t see or join your room.
+                private, token-gated room named by a one-way hash of your email address. So that
+                another device can pick up where you left off, the room keeps the latest playback
+                state (the current queue&apos;s file names and Drive IDs, position and playback
+                settings) on the sync server; nothing else is stored. Other people can&apos;t see
+                or join your room.
               </li>
               <li>
-                <strong className="text-zinc-800 dark:text-zinc-100">Anonymous performance metrics</strong> — page-load timing via Vercel
-                Speed Insights, which doesn&apos;t identify you personally.
+                <strong className="text-zinc-800 dark:text-zinc-100">Anonymous usage and performance metrics</strong> — page views and
+                page-load timing, counted by the site&apos;s own self-hosted analytics. No cookies
+                or identifiers are set; a visit is counted with a hash of the IP address and
+                browser that changes every day, so it can&apos;t follow you from one day to the next.
               </li>
             </ul>
           </section>
@@ -174,10 +179,10 @@ export default function PrivacyPolicyPage() {
               Third-party services involved
             </h2>
             <p>
-              Drive Music runs on Vercel (hosting), uses Google&apos;s APIs for sign-in and
-              Drive access, and Cloudflare/PartyKit for the optional real-time sync described
-              above. Each is bound by its own privacy policy for the infrastructure it
-              provides.
+              Drive Music and its sync service run on a server operated by the developer, behind
+              Cloudflare (network and TLS). It uses Google&apos;s APIs for sign-in and Drive
+              access. Google and Cloudflare are each bound by their own privacy policies for the
+              part they provide.
             </p>
           </section>
 

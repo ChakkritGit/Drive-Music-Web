@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   description: "The terms for using Drive Music.",
 };
 
-const LAST_UPDATED = "August 1, 2026";
+const LAST_UPDATED = "October 16, 2026";
 const REPO_URL = "https://github.com/ChakkritGit/drive-music";
 const SUPPORT_URL = `${REPO_URL}/issues`;
 
@@ -99,9 +99,10 @@ export default function TermsOfServicePage() {
               Third-party services
             </h2>
             <p>
-              Drive Music depends on Google (sign-in and Drive access), Vercel (hosting), and
-              Cloudflare/PartyKit (optional real-time sync). Your use of those underlying
-              services is also governed by their own terms.
+              Drive Music depends on Google (sign-in and Drive access) and Cloudflare (network
+              in front of the developer&apos;s own server, which hosts the app and the optional
+              real-time sync). Your use of those underlying services is also governed by their
+              own terms.
             </p>
           </section>
 
