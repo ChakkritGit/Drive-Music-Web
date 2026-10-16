@@ -300,7 +300,7 @@ describe("Party command bridge", () => {
     expect(sent("command")).toEqual([{ type: "command", command: { type: "seek", seconds: 90 } }]);
   });
 
-  it("keeps main playback running on socket close and after reconnect, until explicit output selection", async () => {
+  it("keeps main playback running when the output's socket drops, then takes the output back on reconnect", async () => {
     await acquire();
     mute.mockClear(); leaseMode.mockClear();
     await act(async () => { socketMock.options!.onClose(); });
@@ -308,16 +308,62 @@ describe("Party command bridge", () => {
     expect(leaseMode).toHaveBeenLastCalledWith(false);
     expect(shared.isPlaying).toBe(true);
     expect(sync.localPlayback).toBe(true);
-    await message({ type: "welcome", deviceId: "local" });
-    expect(sent("detach").at(-1)).toEqual({ type: "detach" });
-    await message(room({ outputId: null, playback: playback({ isPlaying: false }) }));
-    expect(shared.isPlaying).toBe(true);
-    expect(hydrate).toHaveBeenCalledTimes(1);
-    await message(room({ outputId: null, pendingOutputId: "remote" }));
-    expect(shared.isPlaying).toBe(true);
     await act(async () => { shared.seek(66); });
-    expect(local.progress).toBe(66);
-    expect(sent("command")).toEqual([]);
+    // the server released the dropped output; the reconnect sees a free room and claims it again
+    await message({ type: "welcome", deviceId: "local" });
+    expect(sent("output")).toEqual([]);
+    await message(room({ outputId: null, playback: playback({ isPlaying: false }) }));
+    expect(sent("detach")).toEqual([]);
+    expect(sent("output").at(-1)).toMatchObject({ id: "local", adoptLocal: true, seed: { progress: 66, isPlaying: true } });
+    await message(room({ outputGeneration: 2, playback: playback({ progress: 3, isPlaying: false }) }));
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(shared.isPlaying).toBe(true);
+    expect(sent("report").at(-1)).toMatchObject({ outputGeneration: 2, playback: { progress: 66, isPlaying: true } });
+  });
+
+  it("stops a dropped output when another device took over while it was away", async () => {
+    await acquire();
+    await act(async () => { socketMock.options!.onClose(); });
+    mute.mockClear();
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: "remote", outputGeneration: 2 }));
+    expect(mute).toHaveBeenCalledWith(true, "Output selected on another device");
+    expect(local.isPlaying).toBe(false);
+    expect(sent("output")).toEqual([]);
+    expect(sync.localPlayback).toBe(false);
+  });
+
+  it("stays standalone when the dropped output was paused, and rejoins when another device selects it", async () => {
+    await acquire();
+    await act(async () => { socketMock.options!.onError(); });
+    await act(async () => { setLocal({ isPlaying: false }); });
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: null }));
+    expect(sent("detach").at(-1)).toEqual({ type: "detach" });
+    expect(sent("output")).toEqual([]);
+    // the reader starts it again here, then the phone picks this device
+    await act(async () => { setLocal({ isPlaying: true, progress: 50 }); });
+    hydrate.mockClear(); socketMock.socket.send.mockClear();
+    await message(room({ outputId: "local", outputGeneration: 3, playback: playback({ progress: 2 }) }));
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    expect(hydrate).not.toHaveBeenCalled();
+    expect(sync.localPlayback).toBe(true);
+    expect(sent("report").at(-1)).toMatchObject({ outputGeneration: 3, playback: { progress: 50, isPlaying: true } });
+  });
+
+  it("an idle standalone device selected from another device takes the room's queue", async () => {
+    await acquire();
+    await act(async () => { socketMock.options!.onClose(); });
+    await act(async () => { setLocal({ isPlaying: false }); });
+    await message({ type: "welcome", deviceId: "local" });
+    await message(room({ outputId: null }));
+    hydrate.mockClear();
+    const handed = playback({ currentIndex: 2, progress: 30 });
+    await message(room({ outputId: "local", outputGeneration: 4, playback: handed }));
+    await message({ type: "lease", granted: true, sent: performance.now(), leaseMs: 90000 });
+    expect(hydrate).toHaveBeenCalledTimes(1);
+    expect(hydrate.mock.calls[0][0]).toMatchObject({ currentIndex: 2 });
   });
 
   it("still silences the old device before acknowledging an explicit handoff", async () => {

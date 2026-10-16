@@ -60,6 +60,12 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const adoptLocalRef = useRef(false);
   const selectingHereRef = useRef(false);
   const selectionAcknowledgedRef = useRef(false);
+  /** This device was the output when its connection dropped: decide on reconnect whether to take it back. */
+  const reclaimRef = useRef(false);
+  /** A room snapshot has arrived on the current connection (the server sends one on connect). */
+  const freshRoomRef = useRef(false);
+  /** The reconnect decision is waiting for that first snapshot. */
+  const awaitingRoomRef = useRef(false);
   const acquired = useRef<{ generation: number; commandRevision: number; hydrationRevision: number | null; executionTick: number | null } | null>(null);
   const pendingCommands = useRef<{ generation: number; revision: number; command: PartyCommand }[]>([]);
   const [commandTick, setCommandTick] = useState(0);
@@ -86,6 +92,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     acquired.current = null;
     pendingCommands.current = [];
     playerRef.current.setPartyLeaseRequired(false);
+    if (local) reclaimRef.current = true;
     if (local || detachedRef.current) {
       // A lost Party connection ends its session, not the main audio transport.
       detachedRef.current = true;
@@ -107,17 +114,47 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; clearInterval(timer); detach(); setRoomId(null); setRoom(null); roomRef.current = null; setConnected(false); };
   }, [available, status, session?.user?.email, detach, isOffline, isSignedOut]);
 
+  // After a dropped output reconnects: carry on as the output if the room is still free and the
+  // music is playing (Spotify keeps the device that was playing), stop if another device took
+  // over meanwhile, otherwise stay standalone as before.
+  const socketRef = useRef<{ send: (data: string) => void } | null>(null);
+  function resolveReconnect(r: PartyRoom) {
+    reclaimRef.current = false;
+    const send = (value: unknown) => socketRef.current?.send(JSON.stringify(value));
+    const me = idRef.current;
+    if ((r.outputId && r.outputId !== me) || (r.pendingOutputId && r.pendingOutputId !== me)) {
+      detachedRef.current = false; setDetached(false);
+      silence("Output selected on another device");
+      return;
+    }
+    if (r.outputId === me) {
+      detachedRef.current = false; setDetached(false);
+      adoptLocalRef.current = playerRef.current.isPlaying;
+      send({ type: "heartbeat", sent: performance.now() });
+      return;
+    }
+    if (playerRef.current.isPlaying && !r.pendingOutputId && me) {
+      selectionAcknowledgedRef.current = false;
+      selectingHereRef.current = true;
+      adoptLocalRef.current = true;
+      send({ type: "output", id: me, seed: snapshot(playerRef.current), adoptLocal: true });
+      return;
+    }
+    send({ type: "detach" });
+  }
+
   const socket = usePartySocket({
     host: process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "",
     party: "sync-server", room: roomId ?? "unset",
     enabled: available && status === "authenticated" && !!roomId && !isOffline && !isSignedOut,
     query: async () => ({ token: (await fetchToken())?.token ?? "" }),
     onOpen(event) {
+      freshRoomRef.current = false;
       // IDs belong to this PartySocket instance: separate tabs, stable across reconnects.
       (event.target as WebSocket).send(JSON.stringify({ type: "hello", protocol: PARTY_PROTOCOL, ...thisDevice(), commands: true }));
     },
-    onClose() { selectingHereRef.current = false; setConnected(false); detach(); },
-    onError() { selectingHereRef.current = false; setConnected(false); detach(); },
+    onClose() { selectingHereRef.current = false; freshRoomRef.current = false; setConnected(false); detach(); },
+    onError() { selectingHereRef.current = false; freshRoomRef.current = false; setConnected(false); detach(); },
     // This callback runs on websocket events, never during render.
     /* eslint-disable react-hooks/purity */
     onMessage(event) {
@@ -127,7 +164,12 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       try { m = JSON.parse(event.data); } catch { return; }
       if (m.type === "welcome") {
         idRef.current = m.deviceId; setDeviceId(m.deviceId); setConnected(true);
-        if (detachedRef.current) socket.send(JSON.stringify({ type: "detach" }));
+        if (detachedRef.current && reclaimRef.current && !selectingHereRef.current) {
+          // The output's connection dropped (on a phone, typically the page suspended with the
+          // screen off and woke at the next track). Decide against the room as it is now.
+          if (freshRoomRef.current && roomRef.current) resolveReconnect(roomRef.current);
+          else awaitingRoomRef.current = true;
+        } else if (detachedRef.current) socket.send(JSON.stringify({ type: "detach" }));
         socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
       } else if (m.type === "heartbeat-request") {
         socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
@@ -137,6 +179,16 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         }
         const previousOutput = roomRef.current?.outputId;
         roomRef.current = m; setRoom(m);
+        freshRoomRef.current = true;
+        if (m.outputId === idRef.current && previousOutput !== idRef.current && detachedRef.current && !selectingHereRef.current) {
+          // Another device picked this one while it played on its own (its connection had
+          // dropped). Rejoin rather than ignore the grant: the controller would never hear
+          // from this output again. Still playing: keep that and report it. Idle: take the
+          // room's queue, which is the controller handing its playback over.
+          detachedRef.current = false; setDetached(false);
+          reclaimRef.current = false;
+          adoptLocalRef.current = playerRef.current.isPlaying;
+        }
         if (selectingHereRef.current && m.pendingOutputId === idRef.current) selectionAcknowledgedRef.current = true;
         if (selectingHereRef.current && selectionAcknowledgedRef.current && ((m.pendingOutputId && m.pendingOutputId !== idRef.current)
           || (m.outputId && m.outputId !== idRef.current && m.outputId !== previousOutput))) {
@@ -162,6 +214,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         } else if (leaseUntil.current <= performance.now()) {
           socket.send(JSON.stringify({ type: "heartbeat", sent: performance.now() }));
         }
+        if (awaitingRoomRef.current) { awaitingRoomRef.current = false; resolveReconnect(m); }
       } else if (validPlayerCommand(m) && m.outputId === idRef.current) {
         // The worker can flush queued controls before its grant snapshot arrives.
         // Keep those controls while an explicit local takeover is still pending.
@@ -197,6 +250,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     },
     /* eslint-enable react-hooks/purity */
   });
+  useEffect(() => { socketRef.current = socket; }, [socket]);
   useEffect(() => {
     if (isSignedOut) {
       selectingHereRef.current = false;
@@ -288,6 +342,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   }, [available, command, setPartyCommandHandler]);
   const selectOutput = useCallback((id: string) => {
     if (isSignedOut) return;
+    reclaimRef.current = false;
+    awaitingRoomRef.current = false;
     const here = id === idRef.current || id === "__local__";
     if (here) {
       const current = roomRef.current;
