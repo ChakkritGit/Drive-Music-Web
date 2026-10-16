@@ -377,8 +377,11 @@ describe("Party command bridge", () => {
   it("ends an expired Party lease without pausing or scheduling a cutoff of main playback", async () => {
     await acquire(room(), 100);
     mute.mockClear();
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 130)); });
-    expect(socketMock.socket.close).toHaveBeenCalledWith(4000, "Party output lease ended");
+    // Wait for the lease timer itself rather than a fixed 130 ms: with the other test files running
+    // in parallel the timer fired a little late and this failed about one run in four.
+    await act(async () => {
+      await vi.waitFor(() => expect(socketMock.socket.close).toHaveBeenCalledWith(4000, "Party output lease ended"), { timeout: 2000, interval: 10 });
+    });
     expect(leaseMode.mock.calls.every(([required]) => required === false)).toBe(true);
     expect(mute.mock.calls.every(([muted]) => muted === false)).toBe(true);
     expect(shared.isPlaying).toBe(true);

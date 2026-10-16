@@ -238,12 +238,15 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         }
         leaseUntil.current = until;
         if (leaseTimer.current) clearTimeout(leaseTimer.current);
-        leaseTimer.current = setTimeout(() => {
-          if (leaseUntil.current <= performance.now()) {
-            detach();
-            socket.close(4000, "Party output lease ended");
-          }
-        }, until - performance.now());
+        // setTimeout can fire a fraction of a millisecond before performance.now() reaches the
+        // deadline; the check then saw an unexpired lease and the lease never ended. Re-arm instead.
+        const expire = () => {
+          const left = leaseUntil.current - performance.now();
+          if (left > 0) { leaseTimer.current = setTimeout(expire, left + 1); return; }
+          detach();
+          socket.close(4000, "Party output lease ended");
+        };
+        leaseTimer.current = setTimeout(expire, until - performance.now() + 1);
         playerRef.current.grantPartyLease(until);
         setLease(until);
       }
