@@ -95,3 +95,11 @@ npm run test           # vitest
 ## License
 
 Personal project — see [Terms of Service](https://drive-music.chakkritton.com/terms) for usage terms.
+
+## VPS runtime
+
+The Next.js standalone server runs on Bun 1.4.2. Elysia 1.4.30 handles `/api/sync-token`
+and `/api/healthz`. NextAuth still verifies the session before a five-minute HS256 token
+is issued; the account identifier is hashed into the room ID. The existing Bun + Elysia
+Party Play service keeps its WebSocket protocol. The liveness probe does not contact
+Google, read Drive files or connect a sync room.

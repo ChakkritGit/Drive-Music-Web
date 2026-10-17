@@ -10,7 +10,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sinclair/typebox": "0.34.52",
     "clsx": "^2.1.1",
+    "elysia": "1.4.30",
+    "file-type": "22.1.1",
     "idb": "^8.0.3",
     "jose": "^6.2.4",
     "lucide-react": "^1.27.0",
@@ -35,5 +38,8 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "strtok3": "10.3.5"
   }
 }
